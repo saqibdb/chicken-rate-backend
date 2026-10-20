@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from .models import Device, Price
 from .configuration import get_runtime_setting
+from .daily_price import run_daily_price_fetch
 from .youtube import YouTubeImportError, fetch_youtube_prices
 
 
@@ -20,6 +21,7 @@ API_DESCRIPTIONS = {
     "current-price": {"methods": "GET", "description": "Return the newest saved chicken price and its source video.", "parameters": "None"},
     "price-history": {"methods": "GET", "description": "Return prices from the past 30 days by default.", "parameters": "from and to: optional date bounds in YYYY-MM-DD format. limit: maximum results, 1–365 (default 365)."},
     "fetch-youtube-prices": {"methods": "GET", "description": "Fetch recent channel uploads, download thumbnails, run OCR, parse prices, and save matching rows. Response includes a per-step log.", "parameters": "None"},
+    "fetch-todays-price": {"methods": "GET", "description": "Fetch and OCR only today's uploads. Adds today's price only if no price row exists for today; records each call in Django Admin.", "parameters": "None"},
 }
 
 
@@ -136,3 +138,21 @@ def fetch_prices(request):
         cache.delete("youtube-prices-fetch-lock")
     result["message"] = "YouTube thumbnail OCR import finished."
     return Response(result)
+
+
+@api_view(["GET"])
+def fetch_todays_price(request):
+    _record_device(request)
+    call_log, result = run_daily_price_fetch("api")
+    return Response({
+        "status": call_log.result,
+        "fetch_status": result.get("status"),
+        "message": "Today's price fetch finished.",
+        "call_id": call_log.pk,
+        "called_at": call_log.called_at.isoformat(),
+        "error": call_log.error or None,
+        "added": result.get("added", 0),
+        "amount": result.get("amount"),
+        "videos_checked": result.get("videos_checked", 0),
+        "logs": result.get("logs", []),
+    })

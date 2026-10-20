@@ -8,6 +8,7 @@ The importer reads runtime configuration from **Django Admin → Environment var
 - `YOUTUBE_CHANNEL_ID`: optional channel ID. If omitted, the importer uses `YOUTUBE_CHANNEL_HANDLE` (default: `Mianshahzadsaeed786`, matching the Flutter app).
 - `YOUTUBE_CHANNEL_HANDLE`: optional YouTube handle to process when no channel ID is set.
 - `YOUTUBE_FETCH_COOLDOWN_SECONDS`: minimum delay between manual fetch requests (default `3600`, one hour).
+- `DAILY_PRICE_FETCH_TIME`: daily automatic fetch time, `HH:MM` in the server's `Asia/Karachi` timezone. A migration creates this setting with default `08:00`.
 
 Run `python manage.py migrate` to create the environment variables table. Secret values are masked in the admin list and edit form; leaving a secret's edit field blank preserves its current value. The OCR engine and its ONNX Runtime dependency are installed from `requirements.txt`; no Tesseract executable or `TESSERACT_CMD` setting is needed.
 
@@ -24,9 +25,10 @@ Each video is upserted by YouTube video ID, so repeated runs do not create dupli
 - `GET /api/v1/prices/current/` returns the newest stored price.
 - `GET /api/v1/prices/history/` returns prices from the past 30 days by default. Optional query parameters: `from=YYYY-MM-DD`, `to=YYYY-MM-DD`, and `limit=1..365`.
 - `GET /api/v1/prices/fetch/` triggers the thumbnail OCR import and returns `added`, `updated`, `skipped`, `errors`, and `videos_checked` counts plus a `logs` array. Each log entry contains a `step`, `status`, and explanation; video-related entries also include the title, video ID, date, OCR text, or extracted amount. It returns HTTP 429 during the cooldown or while another import is running.
+- `GET /api/v1/prices/fetch/today/` checks only today's channel uploads and adds a price only if there is not already a price row for today. Calls are logged in Django Admin → Daily price fetch logs.
 - `GET /api/v1/` is the HTML API reference, generated from the registered API URL patterns.
 
-The price endpoints include the date, amount, currency, and source video details. History is ordered newest first. A current price request returns HTTP 404 until the first import has stored data. The fetch endpoint is rate limited to protect the YouTube API quota; repeated calls within the cooldown do not make another YouTube request.
+The price endpoints include the date, amount, currency, and source video details. History is ordered newest first. A current price request returns HTTP 404 until the first import has stored data. The all-history fetch endpoint is rate limited to protect the YouTube API quota; repeated calls within the cooldown do not make another YouTube request. The daily fetch scheduler runs inside each web process, but a unique scheduled-date log ensures only one automatic run per day across workers.
 
 Send device metadata as headers on either request:
 

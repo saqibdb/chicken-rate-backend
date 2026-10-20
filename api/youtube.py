@@ -251,6 +251,136 @@ def _price_from_ocr(text):
     return (next(iter(amounts)), first_lines) if len(amounts) == 1 else (None, first_lines)
 
 
+def fetch_todays_price():
+    """Fetch only today's uploads and insert at most one price for today."""
+    logs = []
+    today = timezone.localdate()
+    existing = Price.objects.filter(price_date=today).first()
+    if existing:
+        _log(
+            logs,
+            "check_existing_price",
+            "ok",
+            "Today's price already exists; no row was added.",
+            amount=str(existing.amount),
+            video_id=existing.video_id,
+            date=today.isoformat(),
+        )
+        return {"status": "already_exists", "added": 0, "logs": logs}
+
+    api_key = get_runtime_setting("YOUTUBE_API_KEY")
+    channel_id = get_runtime_setting("YOUTUBE_CHANNEL_ID")
+    channel_handle = get_runtime_setting("YOUTUBE_CHANNEL_HANDLE", DEFAULT_CHANNEL_HANDLE)
+    if not api_key:
+        _log(logs, "configuration", "error", "YOUTUBE_API_KEY is not configured.")
+        raise YouTubeImportError("YOUTUBE_API_KEY is not configured.", logs)
+
+    try:
+        uploads_playlist = _channel_uploads_playlist(api_key, channel_id, channel_handle, logs)
+        _log(logs, "resolve_channel", "ok", "Resolved channel uploads playlist.")
+        playlist = _youtube_get(
+            "playlistItems",
+            {"part": "snippet", "playlistId": uploads_playlist, "maxResults": 8},
+            api_key,
+            logs,
+            "list_today_uploads",
+        )
+    except Exception as exc:
+        if not isinstance(exc, YouTubeImportError):
+            exc = YouTubeImportError(f"Today's YouTube uploads could not be loaded: {exc}")
+        _log(logs, "youtube_api", "error", str(exc))
+        raise YouTubeImportError(str(exc), logs) from exc
+
+    videos = []
+    for item in playlist.get("items", []):
+        snippet = item.get("snippet", {})
+        published_at = parse_datetime(snippet.get("publishedAt", ""))
+        if not published_at:
+            _log(logs, "read_today_upload", "skipped", "Upload has no valid publication timestamp.")
+            continue
+        if timezone.is_naive(published_at):
+            published_at = timezone.make_aware(published_at, timezone.get_current_timezone())
+        published_at = timezone.localtime(published_at)
+        if published_at.date() != today:
+            continue
+        video_id = snippet.get("resourceId", {}).get("videoId")
+        if not video_id:
+            _log(logs, "read_today_upload", "skipped", "Upload has no video ID.")
+            continue
+        thumbnails = snippet.get("thumbnails", {})
+        thumbnail = thumbnails.get("high") or thumbnails.get("medium") or thumbnails.get("default")
+        videos.append({
+            "video_id": video_id,
+            "title": snippet.get("title", "YouTube Short")[:500],
+            "published_at": published_at,
+            "thumbnail_url": (thumbnail or {}).get("url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        })
+    videos.sort(key=lambda video: video["published_at"])
+    _log(logs, "select_today_videos", "ok", "Selected today's uploads in publication order.", videos_selected=len(videos))
+    if not videos:
+        _log(logs, "complete", "failure", "No channel uploads were found for today.")
+        return {"status": "no_price", "added": 0, "videos_checked": 0, "error": "No channel uploads were found for today.", "logs": logs}
+
+    processing_errors = []
+    for video in videos:
+        context = {"video_id": video["video_id"], "title": video["title"], "date": today.isoformat()}
+        try:
+            thumbnail_bytes = _download_thumbnail(video["thumbnail_url"])
+            _log(logs, "download_thumbnail", "ok", "Downloaded today's video thumbnail.", bytes=len(thumbnail_bytes), **context)
+            ocr_text = _recognize_thumbnail(thumbnail_bytes)
+        except Exception as exc:
+            _log(logs, "thumbnail_ocr", "error", str(exc), **context)
+            processing_errors.append(str(exc))
+            if "missing" in str(exc).lower() or "could not initialize" in str(exc).lower():
+                _log(logs, "complete", "failure", "Import stopped because the OCR engine is unavailable.")
+                return {"status": "error", "added": 0, "videos_checked": len(videos), "error": str(exc), "logs": logs}
+            continue
+
+        amount, first_lines = _price_from_ocr(ocr_text)
+        _log(
+            logs,
+            "thumbnail_ocr",
+            "ok" if first_lines else "warning",
+            "OCR completed.",
+            ocr_text=" | ".join(first_lines)[:300],
+            **context,
+        )
+        if amount is None:
+            _log(logs, "parse_price", "skipped", "No single comma-grouped amount was found in the first two OCR lines.", **context)
+            continue
+        _log(logs, "parse_price", "ok", "Found one unambiguous price.", amount=amount, **context)
+
+        existing = Price.objects.filter(price_date=today).first()
+        if existing:
+            _log(logs, "save_price", "skipped", "Today's price was saved by another fetch; no duplicate row was added.", video_id=existing.video_id, date=today.isoformat())
+            return {"status": "already_exists", "added": 0, "videos_checked": len(videos), "logs": logs}
+        try:
+            Price.objects.update_or_create(
+                video_id=video["video_id"],
+                defaults={
+                    "price_date": today,
+                    "amount": Decimal(amount),
+                    "currency": "PKR",
+                    "video_title": video["title"],
+                    "video_url": f"https://www.youtube.com/watch?v={video['video_id']}",
+                    "published_at": video["published_at"],
+                },
+            )
+        except Exception as exc:
+            processing_errors.append(f"Database save failed: {exc}")
+            _log(logs, "save_price", "error", str(exc), amount=amount, **context)
+            continue
+        _log(logs, "save_price", "ok", "Today's price was added to the database.", amount=amount, **context)
+        _log(logs, "complete", "success", "Today's price fetch completed.", added=1)
+        return {"status": "success", "added": 1, "videos_checked": len(videos), "amount": amount, "logs": logs}
+
+    message = "Today's uploads were checked, but no readable price was found."
+    if processing_errors:
+        message = f"{message} Errors: {'; '.join(processing_errors)[:500]}"
+    _log(logs, "complete", "failure", message, videos_checked=len(videos))
+    return {"status": "no_price", "added": 0, "videos_checked": len(videos), "error": message, "logs": logs}
+
+
 def fetch_youtube_prices(max_results=200):
     """Mirror the Flutter app's first-upload-per-day thumbnail OCR process."""
     logs = []

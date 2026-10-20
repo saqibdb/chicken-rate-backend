@@ -52,3 +52,28 @@ class EnvironmentVariable(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class DailyPriceFetchLog(models.Model):
+    class Trigger(models.TextChoices):
+        AUTO = "auto", "Automatic schedule"
+        API = "api", "API request"
+
+    class Result(models.TextChoices):
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        FAILURE = "failure", "Failure"
+
+    called_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    called_by = models.CharField(max_length=8, choices=Trigger.choices, db_index=True)
+    result = models.CharField(max_length=10, choices=Result.choices, default=Result.RUNNING, db_index=True)
+    error = models.TextField(blank=True)
+    details = models.JSONField(default=dict, blank=True)
+    scheduled_date = models.DateField(null=True, blank=True, unique=True)
+
+    class Meta:
+        ordering = ["-called_at"]
+
+    def __str__(self):
+        return f"{self.called_by} {self.called_at:%Y-%m-%d %H:%M:%S} ({self.result})"

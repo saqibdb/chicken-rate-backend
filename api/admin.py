@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django import forms
 
-from .models import Device, EnvironmentVariable, Price
+from .models import DailyPriceFetchLog, Device, EnvironmentVariable, Price
 
 
 @admin.register(Price)
@@ -46,3 +46,18 @@ class EnvironmentVariableAdmin(admin.ModelAdmin):
         if change and obj.is_secret and not form.cleaned_data.get("value"):
             obj.value = EnvironmentVariable.objects.get(pk=obj.pk).value
         super().save_model(request, obj, form, change)
+
+
+@admin.register(DailyPriceFetchLog)
+class DailyPriceFetchLogAdmin(admin.ModelAdmin):
+    list_display = ("called_at", "called_by", "result", "completed_at")
+    list_filter = ("called_by", "result", "called_at")
+    search_fields = ("error",)
+    readonly_fields = ("called_at", "completed_at", "called_by", "result", "error", "details", "scheduled_date")
+    fields = readonly_fields
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
