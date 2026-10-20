@@ -6,6 +6,7 @@ from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -18,7 +19,7 @@ API_DESCRIPTIONS = {
     "test-check": {"methods": "GET", "description": "Check whether the API is running.", "parameters": "None"},
     "current-price": {"methods": "GET", "description": "Return the newest saved chicken price and its source video.", "parameters": "None"},
     "price-history": {"methods": "GET", "description": "Return prices from the past 30 days by default.", "parameters": "from and to: optional date bounds in YYYY-MM-DD format. limit: maximum results, 1–365 (default 365)."},
-    "fetch-youtube-prices": {"methods": "GET", "description": "Fetch recent YouTube videos and insert or update parsed prices.", "parameters": "None"},
+    "fetch-youtube-prices": {"methods": "GET", "description": "Fetch recent channel uploads, download thumbnails, run OCR, parse prices, and save matching rows. Response includes a per-step log.", "parameters": "None"},
 }
 
 
@@ -89,7 +90,7 @@ def current_price(request):
 @api_view(["GET"])
 def price_history(request):
     _record_device(request)
-    today = date.today()
+    today = timezone.localdate()
     queryset = Price.objects.filter(price_date__gte=today - timedelta(days=29), price_date__lte=today)
     start_date = request.query_params.get("from")
     end_date = request.query_params.get("to")
@@ -122,13 +123,16 @@ def fetch_prices(request):
         cooldown = settings.YOUTUBE_FETCH_COOLDOWN_SECONDS
     if cache.get("youtube-prices-fetched"):
         return Response({"status": "throttled", "message": "Prices were fetched recently; try again later."}, status=429)
-    if not cache.add("youtube-prices-fetch-lock", True, timeout=60):
+    if not cache.add("youtube-prices-fetch-lock", True, timeout=600):
         return Response({"status": "in_progress", "message": "A price fetch is already running."}, status=429)
     try:
         result = fetch_youtube_prices()
-        cache.set("youtube-prices-fetched", True, timeout=cooldown)
     except YouTubeImportError as exc:
-        return Response({"status": "error", "message": str(exc)}, status=502)
+        cache.set("youtube-prices-fetched", True, timeout=min(cooldown, 60))
+        return Response({"status": "error", "message": str(exc), "logs": exc.logs}, status=502)
+    else:
+        cache.set("youtube-prices-fetched", True, timeout=cooldown)
     finally:
         cache.delete("youtube-prices-fetch-lock")
-    return Response({"status": "ok", "message": "YouTube prices were fetched.", **result})
+    result["message"] = "YouTube thumbnail OCR import finished."
+    return Response(result)
