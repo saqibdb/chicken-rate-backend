@@ -28,8 +28,14 @@ SECRET_KEY = 'django-insecure-l5k707o==-_+!(+mp$v-1yzzxz#1iwmfb&h7qyh3beml&q-3)9
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "chicken-rate-backend.de2.netrun.io",
+]
+CSRF_TRUSTED_ORIGINS = [
+    "https://chicken-rate-backend.de2.netrun.io",
+]
 
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # Application definition
 
