@@ -1,8 +1,8 @@
 import json
 import re
-import shutil
-import subprocess
+import ssl
 import tempfile
+import time
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -20,6 +20,7 @@ from .models import Price
 PRICE_PATTERN = re.compile(r"(?<![0-9])([0-9]{1,3})\s*,\s*([0-9]{3})")
 DEFAULT_CHANNEL_HANDLE = "Mianshahzadsaeed786"
 MAX_THUMBNAIL_BYTES = 12 * 1024 * 1024
+_OCR_ENGINE = None
 
 
 class YouTubeImportError(Exception):
@@ -34,30 +35,57 @@ def _log(logs, step, status, message, **details):
     logs.append(entry)
 
 
-def _youtube_get(path, params, api_key):
+def _youtube_get(path, params, api_key, logs, step):
     query = urlencode({**params, "key": api_key})
     url = f"https://www.googleapis.com/youtube/v3/{path}?{query}"
-    try:
-        with urlopen(url, timeout=25) as response:
-            return json.load(response)
-    except HTTPError as exc:
+    request = Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "ChickenRateBackend/1.0"},
+    )
+    last_error = None
+    for attempt in range(1, 4):
         try:
-            body = json.loads(exc.read().decode("utf-8"))
-            detail = body.get("error", {}).get("message", str(exc))
-        except Exception:
-            detail = str(exc)
-        raise YouTubeImportError(f"YouTube API request failed: {detail}") from exc
-    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise YouTubeImportError(f"YouTube API request failed: {exc}") from exc
+            with urlopen(request, timeout=25, context=ssl.create_default_context()) as response:
+                return json.load(response)
+        except HTTPError as exc:
+            try:
+                body = json.loads(exc.read().decode("utf-8"))
+                detail = body.get("error", {}).get("message", str(exc))
+            except Exception:
+                detail = str(exc)
+            if exc.code < 500 or attempt == 3:
+                _log(logs, step, "error", "YouTube returned an HTTP error.", attempt=attempt, error=detail[:300])
+                raise YouTubeImportError(f"YouTube API request failed: {detail}") from exc
+            last_error = detail
+        except (URLError, TimeoutError, ssl.SSLError, json.JSONDecodeError) as exc:
+            last_error = str(exc)
+            if attempt == 3:
+                _log(logs, step, "error", "YouTube connection failed after retries.", attempt=attempt, error=last_error[:300])
+                break
+
+        _log(
+            logs,
+            step,
+            "warning",
+            "YouTube request failed; retrying with backoff.",
+            attempt=attempt,
+            error=str(last_error)[:300],
+        )
+        time.sleep(attempt)
+
+    raise YouTubeImportError(
+        f"YouTube API request failed after 3 attempts at {path}: {last_error}. "
+        "Check that the deployed server allows outbound HTTPS to www.googleapis.com."
+    )
 
 
-def _channel_uploads_playlist(api_key, channel_id, channel_handle):
+def _channel_uploads_playlist(api_key, channel_id, channel_handle, logs):
     params = {"part": "contentDetails"}
     if channel_id:
         params["id"] = channel_id
     else:
         params["forHandle"] = f"@{channel_handle.lstrip('@')}"
-    result = _youtube_get("channels", params, api_key)
+    result = _youtube_get("channels", params, api_key, logs, "resolve_channel")
     channels = result.get("items", [])
     if not channels:
         raise YouTubeImportError("YouTube channel could not be found.")
@@ -75,7 +103,7 @@ def _recent_first_uploads(api_key, uploads_playlist, logs, max_results):
         params = {"part": "snippet", "playlistId": uploads_playlist, "maxResults": 50}
         if page_token:
             params["pageToken"] = page_token
-        page = _youtube_get("playlistItems", params, api_key)
+        page = _youtube_get("playlistItems", params, api_key, logs, "list_uploads")
         items = page.get("items", [])
         _log(logs, "list_uploads", "ok", "Loaded upload page.", page=page_number, items=len(items))
         older_than_window = False
@@ -153,27 +181,64 @@ def _download_thumbnail(url):
     return image_bytes
 
 
+def _get_ocr_engine():
+    global _OCR_ENGINE
+    if _OCR_ENGINE is None:
+        try:
+            from rapidocr import RapidOCR
+        except ImportError as exc:
+            raise RuntimeError(
+                "RapidOCR or ONNX Runtime is missing. Redeploy after installing requirements.txt."
+            ) from exc
+        try:
+            _OCR_ENGINE = RapidOCR()
+        except Exception as exc:
+            raise RuntimeError(f"RapidOCR could not initialize: {exc}") from exc
+    return _OCR_ENGINE
+
+
 def _recognize_thumbnail(image_bytes):
-    configured_cmd = get_runtime_setting("TESSERACT_CMD", "tesseract").strip() or "tesseract"
-    executable = shutil.which(configured_cmd)
-    if not executable:
-        raise FileNotFoundError(
-            "Tesseract OCR executable is not installed or TESSERACT_CMD is incorrect."
-        )
     with tempfile.TemporaryDirectory(prefix="chicken-rate-ocr-") as temp_dir:
-        image_path = Path(temp_dir) / "thumbnail"
+        image_path = Path(temp_dir) / "thumbnail.jpg"
         image_path.write_bytes(image_bytes)
-        result = subprocess.run(
-            [executable, str(image_path), "stdout", "--psm", "6", "-l", "eng"],
-            capture_output=True,
-            text=True,
-            timeout=35,
-            check=False,
+        try:
+            result = _get_ocr_engine()(str(image_path))
+        except Exception as exc:
+            raise RuntimeError(f"RapidOCR failed to process the thumbnail: {exc}") from exc
+
+    if not result or not result.txts or result.boxes is None:
+        return ""
+
+    recognized = []
+    for box, text in zip(result.boxes, result.txts):
+        if not text or not text.strip():
+            continue
+        top = sum(float(point[1]) for point in box) / 4
+        height = max(float(point[1]) for point in box) - min(float(point[1]) for point in box)
+        left = min(float(point[0]) for point in box)
+        recognized.append((top, left, max(height, 1.0), text.strip()))
+    recognized.sort(key=lambda item: (item[0], item[1]))
+
+    lines = []
+    for top, left, height, text in recognized:
+        matching_line = next(
+            (line for line in lines if abs(top - line["center_y"]) <= max(height, line["height"]) * 0.6),
+            None,
         )
-    if result.returncode != 0:
-        error = result.stderr.strip() or f"Tesseract exited with code {result.returncode}."
-        raise RuntimeError(error[:500])
-    return result.stdout
+        if matching_line is None:
+            lines.append({"center_y": top, "center_sum": top, "count": 1, "height": height, "parts": [(left, text)]})
+        else:
+            matching_line["parts"].append((left, text))
+            matching_line["center_sum"] += top
+            matching_line["count"] += 1
+            matching_line["center_y"] = matching_line["center_sum"] / matching_line["count"]
+            matching_line["height"] = max(matching_line["height"], height)
+
+    lines.sort(key=lambda line: line["center_y"])
+    return "\n".join(
+        " ".join(text for _, text in sorted(line["parts"]))
+        for line in lines[:2]
+    )
 
 
 def _price_from_ocr(text):
@@ -204,7 +269,7 @@ def fetch_youtube_prices(max_results=200):
 
     _log(logs, "configuration", "ok", "YouTube API key and channel configuration are present.")
     try:
-        uploads_playlist = _channel_uploads_playlist(api_key, channel_id, channel_handle)
+        uploads_playlist = _channel_uploads_playlist(api_key, channel_id, channel_handle, logs)
         _log(logs, "resolve_channel", "ok", "Resolved channel uploads playlist.")
         videos = _recent_first_uploads(api_key, uploads_playlist, logs, max_results)
     except Exception as exc:
@@ -231,14 +296,13 @@ def fetch_youtube_prices(max_results=200):
             ocr_text = _recognize_thumbnail(thumbnail_bytes)
             ocr_lines = [line.strip() for line in ocr_text.splitlines() if line.strip()][:2]
             _log(logs, "thumbnail_ocr", "ok" if ocr_lines else "warning", "OCR completed.", ocr_text=" | ".join(ocr_lines)[:300], **context)
-        except FileNotFoundError as exc:
+        except RuntimeError as exc:
             _log(logs, "thumbnail_ocr", "error", str(exc), **context)
-            _log(logs, "complete", "error", "Import stopped because OCR is unavailable.", **counts)
-            raise YouTubeImportError(str(exc), logs) from exc
-        except (subprocess.TimeoutExpired, RuntimeError, OSError) as exc:
             counts["errors"] += 1
             counts["skipped"] += 1
-            _log(logs, "thumbnail_ocr", "error", str(exc), **context)
+            if "missing" in str(exc).lower() or "could not initialize" in str(exc).lower():
+                _log(logs, "complete", "error", "Import stopped because the OCR engine is unavailable.", **counts)
+                raise YouTubeImportError(str(exc), logs) from exc
             continue
 
         amount, first_lines = _price_from_ocr(ocr_text)
