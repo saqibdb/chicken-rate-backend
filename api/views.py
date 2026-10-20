@@ -22,6 +22,7 @@ API_DESCRIPTIONS = {
     "price-history": {"methods": "GET", "description": "Return prices from the past 30 days by default.", "parameters": "from and to: optional date bounds in YYYY-MM-DD format. limit: maximum results, 1–365 (default 365)."},
     "fetch-youtube-prices": {"methods": "GET", "description": "Fetch recent channel uploads, download thumbnails, run OCR, parse prices, and save matching rows. Response includes a per-step log.", "parameters": "None"},
     "fetch-todays-price": {"methods": "GET", "description": "Fetch and OCR only today's uploads. Adds today's price only if no price row exists for today; records each call in Django Admin.", "parameters": "None"},
+    "register-push-device": {"methods": "POST", "description": "Register or refresh an Android device's Firebase push token.", "parameters": "JSON body: device_id (required), fcm_token (required), device_name, platform, app_version, os_version (optional)."},
 }
 
 
@@ -156,3 +157,22 @@ def fetch_todays_price(request):
         "videos_checked": result.get("videos_checked", 0),
         "logs": result.get("logs", []),
     })
+
+
+@api_view(["POST"])
+def register_push_device(request):
+    device_id = str(request.data.get("device_id", "")).strip()
+    token = str(request.data.get("fcm_token", "")).strip()
+    if not device_id or not token:
+        return Response({"status": "error", "message": "device_id and fcm_token are required."}, status=400)
+    if len(device_id) > 128 or len(token) > 512:
+        return Response({"status": "error", "message": "device_id or fcm_token is too long."}, status=400)
+    defaults = {
+        "fcm_token": token,
+        "device_name": str(request.data.get("device_name", ""))[:200],
+        "platform": str(request.data.get("platform", "android"))[:64],
+        "app_version": str(request.data.get("app_version", ""))[:64],
+        "os_version": str(request.data.get("os_version", ""))[:64],
+    }
+    Device.objects.update_or_create(device_id=device_id, defaults=defaults)
+    return Response({"status": "ok", "message": "Push token registered."})

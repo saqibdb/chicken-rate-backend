@@ -27,8 +27,8 @@
   <section class="endpoint">
     <span class="method">{{ endpoint.methods }}</span><h2><code>{{ endpoint.path }}</code></h2>
     <p>{{ endpoint.description }}</p>
-    <dl><dt>Query parameters</dt><dd>{{ endpoint.parameters }}</dd></dl>
-    <dl><dt>Device headers</dt><dd><code>X-Device-ID</code> (required for device tracking), <code>X-Device-Name</code>, <code>X-Platform</code>, <code>X-App-Version</code>, <code>X-OS-Version</code>.</dd></dl>
+    <dl><dt>Parameters</dt><dd>{{ endpoint.parameters }}</dd></dl>
+    <dl><dt>Device headers</dt><dd><code>X-Device-ID</code>, <code>X-Device-Name</code>, <code>X-Platform</code>, <code>X-App-Version</code>, <code>X-OS-Version</code>. Device registration is done by the push-token endpoint.</dd></dl>
   </section>
   {% endfor %}
   <section class="endpoint">

@@ -28,6 +28,7 @@ class Device(models.Model):
     platform = models.CharField(max_length=64, blank=True)
     app_version = models.CharField(max_length=64, blank=True)
     os_version = models.CharField(max_length=64, blank=True)
+    fcm_token = models.CharField(max_length=512, blank=True, db_index=True)
     last_ip_address = models.GenericIPAddressField(null=True, blank=True)
     first_seen = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True, db_index=True)
@@ -77,3 +78,29 @@ class DailyPriceFetchLog(models.Model):
 
     def __str__(self):
         return f"{self.called_by} {self.called_at:%Y-%m-%d %H:%M:%S} ({self.result})"
+
+
+class PushNotification(models.Model):
+    class Status(models.TextChoices):
+        SENDING = "sending", "Sending"
+        SENT = "sent", "Sent"
+        PARTIAL = "partial", "Partially sent"
+        FAILED = "failed", "Failed"
+
+    title = models.CharField(max_length=120, default="Chicken Price")
+    message = models.TextField(max_length=2000)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.SENDING)
+    devices_targeted = models.PositiveIntegerField(default=0)
+    sent_count = models.PositiveIntegerField(default=0)
+    failure_count = models.PositiveIntegerField(default=0)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "push notification"
+        verbose_name_plural = "push notifications"
+
+    def __str__(self):
+        return f"{self.created_at:%Y-%m-%d %H:%M} — {self.status}"

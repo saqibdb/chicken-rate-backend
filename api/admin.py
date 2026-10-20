@@ -1,7 +1,13 @@
 from django.contrib import admin
+from django.contrib import messages
 from django import forms
+from django.http import HttpResponseRedirect
+from django.core.exceptions import PermissionDenied
+from django.template.response import TemplateResponse
+from django.urls import path, reverse
 
-from .models import DailyPriceFetchLog, Device, EnvironmentVariable, Price
+from .models import DailyPriceFetchLog, Device, EnvironmentVariable, Price, PushNotification
+from .push_notifications import send_broadcast
 
 
 @admin.register(Price)
@@ -15,6 +21,10 @@ class PriceAdmin(admin.ModelAdmin):
 class DeviceAdmin(admin.ModelAdmin):
     list_display = ("device_id", "device_name", "platform", "app_version", "last_seen")
     search_fields = ("device_id", "device_name")
+    list_filter = ("platform",)
+
+    def get_readonly_fields(self, request, obj=None):
+        return ("first_seen", "last_seen") if obj else ()
 
 
 class EnvironmentVariableForm(forms.ModelForm):
@@ -61,3 +71,50 @@ class DailyPriceFetchLogAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+class PushNotificationForm(forms.Form):
+    title = forms.CharField(max_length=120, initial="Chicken Price")
+    message = forms.CharField(max_length=2000, widget=forms.Textarea(attrs={"rows": 5}), label="Message")
+
+
+@admin.register(PushNotification)
+class PushNotificationAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "title", "status", "devices_targeted", "sent_count", "failure_count")
+    list_filter = ("status", "created_at")
+    search_fields = ("title", "message", "error")
+    change_list_template = "admin/api/pushnotification/change_list.html"
+    readonly_fields = ("created_at", "sent_at", "status", "devices_targeted", "sent_count", "failure_count", "error")
+    fields = ("title", "message", *readonly_fields)
+
+    def get_urls(self):
+        return [path("send/", self.admin_site.admin_view(self.send_view), name="api_pushnotification_send")] + super().get_urls()
+
+    def send_view(self, request):
+        if not self.has_add_permission(request):
+            raise PermissionDenied
+        if request.method == "POST":
+            form = PushNotificationForm(request.POST)
+            if form.is_valid():
+                notification = PushNotification.objects.create(
+                    title=form.cleaned_data["title"], message=form.cleaned_data["message"]
+                )
+                notification = send_broadcast(notification)
+                if notification.sent_count:
+                    messages.success(
+                        request,
+                        f"Notification processed: sent to {notification.sent_count} device(s); "
+                        f"{notification.failure_count} failure(s).",
+                    )
+                else:
+                    messages.error(request, notification.error or "No notifications were sent.")
+                return HttpResponseRedirect(reverse("admin:api_pushnotification_changelist"))
+        else:
+            form = PushNotificationForm()
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "form": form,
+            "title": "Send push notification",
+        }
+        return TemplateResponse(request, "admin/api/pushnotification/send.html", context)

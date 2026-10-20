@@ -26,7 +26,12 @@ Each video is upserted by YouTube video ID, so repeated runs do not create dupli
 - `GET /api/v1/prices/history/` returns prices from the past 30 days by default. Optional query parameters: `from=YYYY-MM-DD`, `to=YYYY-MM-DD`, and `limit=1..365`.
 - `GET /api/v1/prices/fetch/` triggers the thumbnail OCR import and returns `added`, `updated`, `skipped`, `errors`, and `videos_checked` counts plus a `logs` array. Each log entry contains a `step`, `status`, and explanation; video-related entries also include the title, video ID, date, OCR text, or extracted amount. It returns HTTP 429 during the cooldown or while another import is running.
 - `GET /api/v1/prices/fetch/today/` checks only today's channel uploads and adds a price only if there is not already a price row for today. Calls are logged in Django Admin → Daily price fetch logs.
+- `POST /api/v1/devices/register-push/` registers an Android installation with its FCM token. JSON body: `device_id`, `fcm_token`, and optional `device_name`, `platform`, `app_version`, `os_version`.
 - `GET /api/v1/` is the HTML API reference, generated from the registered API URL patterns.
+
+## Android push notifications
+
+Install `firebase-admin` from `requirements.txt`, then run `python manage.py migrate`. Add either `FIREBASE_SERVICE_ACCOUNT_JSON` (compact service-account JSON; mark the Environment Variable as secret) or `FIREBASE_SERVICE_ACCOUNT_FILE` (server path to a service-account JSON file) in Django Admin → Environment Variables. The Android app must be connected to the same Firebase project and register each device token at `/api/v1/devices/register-push/`. In Django Admin → Push notifications, choose **Send notification**, enter the title and message, and press **Send**. The admin log records counts and errors; a successful FCM submission means FCM accepted the message, not that the device displayed it.
 
 The price endpoints include the date, amount, currency, and source video details. History is ordered newest first. A current price request returns HTTP 404 until the first import has stored data. The all-history fetch endpoint is rate limited to protect the YouTube API quota; repeated calls within the cooldown do not make another YouTube request. The daily fetch scheduler runs inside each web process, but a unique scheduled-date log ensures only one automatic run per day across workers.
 
