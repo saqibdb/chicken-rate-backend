@@ -10,6 +10,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import Device, Price
+from .configuration import get_runtime_setting
 from .youtube import YouTubeImportError, fetch_youtube_prices
 
 
@@ -112,7 +113,13 @@ def price_history(request):
 @api_view(["GET"])
 def fetch_prices(request):
     _record_device(request)
-    cooldown = settings.YOUTUBE_FETCH_COOLDOWN_SECONDS
+    cooldown_value = get_runtime_setting(
+        "YOUTUBE_FETCH_COOLDOWN_SECONDS", str(settings.YOUTUBE_FETCH_COOLDOWN_SECONDS)
+    )
+    try:
+        cooldown = max(int(cooldown_value), 0)
+    except ValueError:
+        cooldown = settings.YOUTUBE_FETCH_COOLDOWN_SECONDS
     if cache.get("youtube-prices-fetched"):
         return Response({"status": "throttled", "message": "Prices were fetched recently; try again later."}, status=429)
     if not cache.add("youtube-prices-fetch-lock", True, timeout=60):

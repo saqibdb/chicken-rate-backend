@@ -2,11 +2,13 @@
 
 ## Server configuration
 
-Set these environment variables on the deployed Django service:
+The importer reads runtime configuration from **Django Admin → Environment variables**. Add these rows there after running migrations. When no admin row exists, the matching process environment variable is used as a fallback:
 
-- `YOUTUBE_API_KEY`: a YouTube Data API v3 key with YouTube Data API v3 enabled.
+- `YOUTUBE_API_KEY`: a YouTube Data API v3 key with YouTube Data API v3 enabled. Mark as secret.
 - `YOUTUBE_CHANNEL_ID`: the channel ID whose uploads contain the chicken prices.
 - `YOUTUBE_FETCH_COOLDOWN_SECONDS`: minimum delay between manual fetch requests (default `3600`, one hour).
+
+Run `python manage.py migrate` to create the environment variables table. Secret values are masked in the admin list and edit form; leaving a secret's edit field blank preserves its current value.
 
 The importer searches the newest 50 videos on that channel and extracts the first price explicitly marked with `PKR`, `Rs`/`Rupees`, or `روپے` from its title or description. Videos without a marked price are skipped. Run it on a schedule (for example, hourly) using the server's scheduler:
 

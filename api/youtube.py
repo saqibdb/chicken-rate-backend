@@ -5,9 +5,9 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from django.conf import settings
 from django.utils.dateparse import parse_datetime
 
+from .configuration import get_runtime_setting
 from .models import Price
 
 
@@ -23,8 +23,8 @@ class YouTubeImportError(Exception):
 
 def fetch_youtube_prices(max_results=50):
     """Fetch recent videos and upsert prices explicitly marked in metadata."""
-    api_key = settings.YOUTUBE_API_KEY
-    channel_id = settings.YOUTUBE_CHANNEL_ID
+    api_key = get_runtime_setting("YOUTUBE_API_KEY")
+    channel_id = get_runtime_setting("YOUTUBE_CHANNEL_ID")
     if not api_key or not channel_id:
         raise YouTubeImportError("YouTube import is not configured on the server.")
     if not 1 <= max_results <= 50:

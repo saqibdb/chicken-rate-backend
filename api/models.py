@@ -34,3 +34,21 @@ class Device(models.Model):
 
     def __str__(self):
         return self.device_name or self.device_id
+
+
+class EnvironmentVariable(models.Model):
+    """Runtime configuration that administrators can change without a deploy."""
+
+    name = models.CharField(max_length=100, unique=True)
+    value = models.TextField(blank=True)
+    description = models.CharField(max_length=255, blank=True)
+    is_secret = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "environment variable"
+        verbose_name_plural = "environment variables"
+
+    def __str__(self):
+        return self.name
