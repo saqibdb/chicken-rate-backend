@@ -161,6 +161,7 @@ SECRET_KEY = os.environ.get("CHICKEN_RATE", "local-development-only")
 DEBUG = False
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 YOUTUBE_CHANNEL_ID = os.environ.get("YOUTUBE_CHANNEL_ID", "")
+YOUTUBE_FETCH_COOLDOWN_SECONDS = int(os.environ.get("YOUTUBE_FETCH_COOLDOWN_SECONDS", "3600"))
 
 ALLOWED_HOSTS = [
     '.netrun.io',

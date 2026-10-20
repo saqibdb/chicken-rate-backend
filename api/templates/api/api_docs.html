@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chicken Rate API</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, sans-serif; color: #17211b; background: #f3f6f3; }
+    body { max-width: 960px; margin: 40px auto; padding: 0 20px; }
+    h1 { margin-bottom: 8px; }
+    .intro { color: #526057; margin-bottom: 28px; }
+    .endpoint { background: #fff; border: 1px solid #dce5dc; border-radius: 10px; padding: 20px; margin: 14px 0; }
+    .method { display: inline-block; border-radius: 5px; background: #e5f4e9; color: #176b36; font-weight: 700; padding: 4px 8px; margin-right: 8px; }
+    code { background: #f1f3f2; border-radius: 4px; padding: 3px 6px; overflow-wrap: anywhere; }
+    h2 { display: inline; font-size: 1.05rem; }
+    dt { font-weight: 650; margin-top: 14px; }
+    dd { margin: 5px 0 0; color: #526057; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    td, th { border-bottom: 1px solid #e6ebe7; padding: 9px; text-align: left; }
+    @media (max-width: 600px) { body { margin: 22px auto; } .endpoint { padding: 15px; } }
+  </style>
+</head>
+<body>
+  <h1>Chicken Rate API</h1>
+  <p class="intro">Available API endpoints. Base URL: <code>{{ request.scheme }}://{{ request.get_host }}/api/v1/</code></p>
+  {% for endpoint in endpoints %}
+  <section class="endpoint">
+    <span class="method">{{ endpoint.methods }}</span><h2><code>{{ endpoint.path }}</code></h2>
+    <p>{{ endpoint.description }}</p>
+    <dl><dt>Query parameters</dt><dd>{{ endpoint.parameters }}</dd></dl>
+    <dl><dt>Device headers</dt><dd><code>X-Device-ID</code> (required for device tracking), <code>X-Device-Name</code>, <code>X-Platform</code>, <code>X-App-Version</code>, <code>X-OS-Version</code>.</dd></dl>
+  </section>
+  {% endfor %}
+  <section class="endpoint">
+    <h2>Price response fields</h2>
+    <table><thead><tr><th>Field</th><th>Description</th></tr></thead><tbody>
+      <tr><td><code>date</code></td><td>Price date (YYYY-MM-DD)</td></tr>
+      <tr><td><code>amount</code>, <code>currency</code></td><td>Price amount and currency</td></tr>
+      <tr><td><code>video.id</code>, <code>video.title</code>, <code>video.url</code></td><td>YouTube source video</td></tr>
+      <tr><td><code>video.published_at</code></td><td>Video publication timestamp</td></tr>
+    </tbody></table>
+  </section>
+</body>
+</html>
