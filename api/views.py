@@ -1,16 +1,21 @@
 from datetime import date, timedelta
+import logging
+import threading
 
 from django.conf import settings
 from django.core.cache import cache
+from django.core import signing
+from django.db import close_old_connections
 from django.http import JsonResponse
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_GET
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import urlencode
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Device, Price
+from .models import DailyPriceFetchLog, Device, Price
 from .configuration import get_runtime_setting
 from .daily_price import run_daily_price_fetch
 from .youtube import YouTubeImportError, fetch_youtube_prices
@@ -21,7 +26,8 @@ API_DESCRIPTIONS = {
     "current-price": {"methods": "GET", "description": "Return the newest saved chicken price and its source video.", "parameters": "None"},
     "price-history": {"methods": "GET", "description": "Return prices from the past 30 days by default.", "parameters": "from and to: optional date bounds in YYYY-MM-DD format. limit: maximum results, 1–365 (default 365)."},
     "fetch-youtube-prices": {"methods": "GET", "description": "Fetch recent channel uploads, download thumbnails, run OCR, parse prices, and save matching rows. Response includes a per-step log.", "parameters": "None"},
-    "fetch-todays-price": {"methods": "GET", "description": "Fetch and OCR only today's uploads. Adds today's price only if no price row exists for today; records each call in Django Admin.", "parameters": "None"},
+    "fetch-todays-price": {"methods": "GET", "description": "Start today's upload and OCR import in the background. Returns a call ID and status URL; adds a price only if no row exists for today.", "parameters": "None"},
+    "fetch-todays-price-status": {"methods": "GET", "description": "Read the live progress, result, and step logs for a today's price fetch.", "parameters": "Path: call_id (required)."},
     "register-push-device": {"methods": "POST", "description": "Register or refresh an Android device's Firebase push token.", "parameters": "JSON body: device_id (required), fcm_token (required), device_name, platform, app_version, os_version (optional)."},
 }
 
@@ -35,8 +41,16 @@ def api_docs(request):
         if not pattern.name or pattern.name == "api-docs":
             continue
         info = API_DESCRIPTIONS.get(pattern.name, {})
+        try:
+            endpoint_path = reverse(pattern.name)
+        except Exception:
+            if pattern.name == "fetch-todays-price-status":
+                endpoint_path = reverse(pattern.name, kwargs={"call_id": 1})
+                endpoint_path = endpoint_path.rsplit("/1/", 1)[0] + "/{call_id}/"
+            else:
+                continue
         endpoints.append({
-            "path": reverse(pattern.name),
+            "path": endpoint_path,
             "methods": info.get("methods", "See endpoint"),
             "description": info.get("description", ""),
             "parameters": info.get("parameters", "None"),
@@ -144,18 +158,70 @@ def fetch_prices(request):
 @api_view(["GET"])
 def fetch_todays_price(request):
     _record_device(request)
-    call_log, result = run_daily_price_fetch("api")
+    call_log = DailyPriceFetchLog.objects.create(called_by="api")
+    worker = threading.Thread(
+        target=_run_daily_fetch_in_background,
+        args=(call_log.pk,),
+        name=f"today-price-fetch-{call_log.pk}",
+        daemon=True,
+    )
+    worker.start()
     return Response({
-        "status": call_log.result,
-        "fetch_status": result.get("status"),
-        "message": "Today's price fetch finished.",
+        "status": "running",
+        "message": "Today's price fetch was started. Poll status_url for progress and the result.",
         "call_id": call_log.pk,
         "called_at": call_log.called_at.isoformat(),
+        "status_url": request.build_absolute_uri(
+            reverse("fetch-todays-price-status", kwargs={"call_id": call_log.pk})
+            + "?"
+            + urlencode({"signature": signing.dumps(call_log.pk, salt="daily-price-fetch-status")})
+        ),
+    }, status=202)
+
+
+def _run_daily_fetch_in_background(call_log_id):
+    close_old_connections()
+    try:
+        call_log = DailyPriceFetchLog.objects.get(pk=call_log_id)
+        run_daily_price_fetch("api", call_log=call_log)
+    except Exception:
+        logging.getLogger(__name__).exception("Background daily price fetch %s failed", call_log_id)
+        DailyPriceFetchLog.objects.filter(pk=call_log_id).update(
+            result="failure",
+            error="The background price fetch failed. Check server logs for details.",
+            completed_at=timezone.now(),
+        )
+    finally:
+        close_old_connections()
+
+
+@api_view(["GET"])
+def fetch_todays_price_status(request, call_id):
+    try:
+        signed_call_id = signing.loads(
+            request.query_params.get("signature", ""),
+            salt="daily-price-fetch-status",
+            max_age=60 * 60 * 24,
+        )
+    except signing.BadSignature:
+        return Response({"detail": "A valid status_url signature is required."}, status=403)
+    if signed_call_id != call_id:
+        return Response({"detail": "Status URL does not match the requested call."}, status=403)
+    _record_device(request)
+    call_log = get_object_or_404(DailyPriceFetchLog, pk=call_id)
+    details = call_log.details or {}
+    return Response({
+        "status": call_log.result,
+        "fetch_status": details.get("status", call_log.result),
+        "call_id": call_log.pk,
+        "called_by": call_log.called_by,
+        "called_at": call_log.called_at.isoformat(),
+        "completed_at": call_log.completed_at.isoformat() if call_log.completed_at else None,
         "error": call_log.error or None,
-        "added": result.get("added", 0),
-        "amount": result.get("amount"),
-        "videos_checked": result.get("videos_checked", 0),
-        "logs": result.get("logs", []),
+        "added": details.get("added", 0),
+        "amount": details.get("amount"),
+        "videos_checked": details.get("videos_checked", 0),
+        "logs": details.get("logs", []),
     })
 
 

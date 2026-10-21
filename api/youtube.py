@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import ssl
 import tempfile
@@ -21,6 +22,22 @@ PRICE_PATTERN = re.compile(r"(?<![0-9])([0-9]{1,3})\s*,\s*([0-9]{3})")
 DEFAULT_CHANNEL_HANDLE = "Mianshahzadsaeed786"
 MAX_THUMBNAIL_BYTES = 12 * 1024 * 1024
 _OCR_ENGINE = None
+logger = logging.getLogger(__name__)
+
+
+class _ProgressLogs(list):
+    def __init__(self, callback=None):
+        super().__init__()
+        self.callback = callback
+
+    def append(self, item):
+        super().append(item)
+        logger.info("YouTube price fetch: %s (%s) %s", item["step"], item["status"], item["message"])
+        if self.callback:
+            try:
+                self.callback(list(self))
+            except Exception:
+                logger.exception("Could not persist YouTube price fetch progress")
 
 
 class YouTubeImportError(Exception):
@@ -191,10 +208,23 @@ def _get_ocr_engine():
                 "RapidOCR or ONNX Runtime is missing. Redeploy after installing requirements.txt."
             ) from exc
         try:
-            _OCR_ENGINE = RapidOCR()
+            intra_threads = _ocr_thread_count("RAPIDOCR_INTRA_OP_THREADS")
+            inter_threads = _ocr_thread_count("RAPIDOCR_INTER_OP_THREADS")
+            _OCR_ENGINE = RapidOCR(params={
+                "EngineConfig.onnxruntime.intra_op_num_threads": intra_threads,
+                "EngineConfig.onnxruntime.inter_op_num_threads": inter_threads,
+            })
+            logger.info("RapidOCR initialized with ONNX threads intra=%s inter=%s", intra_threads, inter_threads)
         except Exception as exc:
             raise RuntimeError(f"RapidOCR could not initialize: {exc}") from exc
     return _OCR_ENGINE
+
+
+def _ocr_thread_count(setting_name):
+    try:
+        return min(max(int(get_runtime_setting(setting_name, "1")), 1), 8)
+    except (TypeError, ValueError):
+        return 1
 
 
 def _recognize_thumbnail(image_bytes):
@@ -251,9 +281,9 @@ def _price_from_ocr(text):
     return (next(iter(amounts)), first_lines) if len(amounts) == 1 else (None, first_lines)
 
 
-def fetch_todays_price():
+def fetch_todays_price(progress_callback=None):
     """Fetch only today's uploads and insert at most one price for today."""
-    logs = []
+    logs = _ProgressLogs(progress_callback)
     today = timezone.localdate()
     existing = Price.objects.filter(price_date=today).first()
     if existing:
