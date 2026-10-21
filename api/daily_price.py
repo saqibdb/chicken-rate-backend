@@ -13,7 +13,7 @@ from .youtube import YouTubeImportError, fetch_todays_price
 DAILY_TIME_SETTING = "DAILY_PRICE_FETCH_TIME"
 FETCH_LOCK_SETTING = "DAILY_PRICE_FETCH_LOCK"
 FETCH_LOCK_BUSY_MESSAGE = "Fetch skipped because another run is already active."
-FETCH_LOCK_MINUTES = 20
+FETCH_LOCK_MINUTES = 5
 
 
 def _acquire_fetch_lease():

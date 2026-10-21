@@ -28,6 +28,7 @@ Each video is upserted by YouTube video ID, so repeated runs do not create dupli
 - `GET /api/v1/prices/fetch/` triggers the thumbnail OCR import and returns `added`, `updated`, `skipped`, `errors`, and `videos_checked` counts plus a `logs` array. Each log entry contains a `step`, `status`, and explanation; video-related entries also include the title, video ID, date, OCR text, or extracted amount. It returns HTTP 429 during the cooldown or while another import is running.
 - `GET /api/v1/prices/fetch/today/` starts today's import in the background and returns HTTP 202 with a `call_id` and `status_url`. Poll the returned URL for step logs and the final result. Calls and progress are also saved in Django Admin → Daily price fetch logs.
 - `GET /api/v1/prices/fetch/today/<call_id>/` returns the current progress and final result for a fetch started above.
+- `GET /api/v1/ocr/diagnostic/?video_id=<11-character-id>` runs one thumbnail through download, RapidOCR initialization, and OCR without inserting a price. It returns a signed `status_url`; poll it to see the last completed stage. Results are also listed in Django Admin → OCR diagnostic logs.
 - `POST /api/v1/devices/register-push/` registers an Android installation with its FCM token. JSON body: `device_id`, `fcm_token`, and optional `device_name`, `platform`, `app_version`, `os_version`.
 - `GET /api/v1/` is the HTML API reference, generated from the registered API URL patterns.
 

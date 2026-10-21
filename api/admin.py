@@ -6,7 +6,7 @@ from django.core.exceptions import PermissionDenied
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 
-from .models import DailyPriceFetchLog, Device, EnvironmentVariable, Price, PushNotification
+from .models import DailyPriceFetchLog, Device, EnvironmentVariable, OCRDiagnosticLog, Price, PushNotification
 from .push_notifications import send_broadcast
 
 
@@ -118,3 +118,18 @@ class PushNotificationAdmin(admin.ModelAdmin):
             "title": "Send push notification",
         }
         return TemplateResponse(request, "admin/api/pushnotification/send.html", context)
+
+
+@admin.register(OCRDiagnosticLog)
+class OCRDiagnosticLogAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "video_id", "status", "duration_ms", "completed_at")
+    list_filter = ("status", "created_at")
+    search_fields = ("video_id", "ocr_text", "error")
+    readonly_fields = ("video_id", "created_at", "completed_at", "status", "duration_ms", "ocr_text", "error", "details")
+    fields = readonly_fields
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

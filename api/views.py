@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 import logging
+import re
 import threading
 
 from django.conf import settings
@@ -15,9 +16,10 @@ from django.utils.http import urlencode
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import DailyPriceFetchLog, Device, Price
+from .models import DailyPriceFetchLog, Device, OCRDiagnosticLog, Price
 from .configuration import get_runtime_setting
 from .daily_price import run_daily_price_fetch
+from .ocr_diagnostics import run_ocr_diagnostic
 from .youtube import YouTubeImportError, fetch_youtube_prices
 
 
@@ -28,6 +30,8 @@ API_DESCRIPTIONS = {
     "fetch-youtube-prices": {"methods": "GET", "description": "Fetch recent channel uploads, download thumbnails, run OCR, parse prices, and save matching rows. Response includes a per-step log.", "parameters": "None"},
     "fetch-todays-price": {"methods": "GET", "description": "Start today's upload and OCR import in the background. Returns a call ID and status URL; adds a price only if no row exists for today.", "parameters": "None"},
     "fetch-todays-price-status": {"methods": "GET", "description": "Read the live progress, result, and step logs for a today's price fetch.", "parameters": "Path: call_id (required)."},
+    "ocr-diagnostic": {"methods": "GET", "description": "Run a single-thumbnail OCR diagnostic without saving a price. Returns a diagnostic ID and status URL.", "parameters": "Query: video_id (required; 11-character YouTube video ID)."},
+    "ocr-diagnostic-status": {"methods": "GET", "description": "Read live stages and result of a one-thumbnail OCR diagnostic.", "parameters": "Query: diagnostic_id and signature (from status_url)."},
     "register-push-device": {"methods": "POST", "description": "Register or refresh an Android device's Firebase push token.", "parameters": "JSON body: device_id (required), fcm_token (required), device_name, platform, app_version, os_version (optional)."},
 }
 
@@ -221,6 +225,62 @@ def fetch_todays_price_status(request, call_id):
         "added": details.get("added", 0),
         "amount": details.get("amount"),
         "videos_checked": details.get("videos_checked", 0),
+        "logs": details.get("logs", []),
+    })
+
+
+@api_view(["GET"])
+def start_ocr_diagnostic(request):
+    _record_device(request)
+    video_id = request.query_params.get("video_id", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        return Response({"detail": "Provide an 11-character YouTube video_id."}, status=400)
+    diagnostic = OCRDiagnosticLog.objects.create(video_id=video_id)
+    worker = threading.Thread(
+        target=run_ocr_diagnostic,
+        args=(diagnostic.pk,),
+        name=f"ocr-diagnostic-{diagnostic.pk}",
+        daemon=True,
+    )
+    worker.start()
+    signature = signing.dumps(diagnostic.pk, salt="ocr-diagnostic-status")
+    status_url = request.build_absolute_uri(
+        reverse("ocr-diagnostic-status") + "?" + urlencode({"diagnostic_id": diagnostic.pk, "signature": signature})
+    )
+    return Response({
+        "status": "running",
+        "message": "OCR diagnostic started; poll status_url for its stages and result.",
+        "diagnostic_id": diagnostic.pk,
+        "video_id": video_id,
+        "status_url": status_url,
+    }, status=202)
+
+
+@api_view(["GET"])
+def ocr_diagnostic_status(request):
+    try:
+        diagnostic_id = int(request.query_params.get("diagnostic_id", ""))
+        signed_id = signing.loads(
+            request.query_params.get("signature", ""),
+            salt="ocr-diagnostic-status",
+            max_age=60 * 60 * 24,
+        )
+    except (ValueError, signing.BadSignature):
+        return Response({"detail": "A valid diagnostic status_url is required."}, status=403)
+    if signed_id != diagnostic_id:
+        return Response({"detail": "Status URL does not match the diagnostic."}, status=403)
+    diagnostic = get_object_or_404(OCRDiagnosticLog, pk=diagnostic_id)
+    details = diagnostic.details or {}
+    return Response({
+        "status": diagnostic.status,
+        "diagnostic_id": diagnostic.pk,
+        "video_id": diagnostic.video_id,
+        "created_at": diagnostic.created_at.isoformat(),
+        "completed_at": diagnostic.completed_at.isoformat() if diagnostic.completed_at else None,
+        "duration_ms": diagnostic.duration_ms,
+        "ocr_text": diagnostic.ocr_text or None,
+        "error": diagnostic.error or None,
+        "current_step": details.get("current_step"),
         "logs": details.get("logs", []),
     })
 

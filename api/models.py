@@ -104,3 +104,27 @@ class PushNotification(models.Model):
 
     def __str__(self):
         return f"{self.created_at:%Y-%m-%d %H:%M} — {self.status}"
+
+
+class OCRDiagnosticLog(models.Model):
+    class Status(models.TextChoices):
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        FAILURE = "failure", "Failure"
+
+    video_id = models.CharField(max_length=32)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.RUNNING, db_index=True)
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    ocr_text = models.TextField(blank=True)
+    error = models.TextField(blank=True)
+    details = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "OCR diagnostic log"
+        verbose_name_plural = "OCR diagnostic logs"
+
+    def __str__(self):
+        return f"OCR {self.video_id} {self.created_at:%Y-%m-%d %H:%M:%S} ({self.status})"
