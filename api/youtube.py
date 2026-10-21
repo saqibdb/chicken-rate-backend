@@ -202,7 +202,7 @@ def _get_ocr_engine():
     global _OCR_ENGINE
     if _OCR_ENGINE is None:
         try:
-            from rapidocr import RapidOCR
+            from rapidocr import ModelType, RapidOCR
         except ImportError as exc:
             raise RuntimeError(
                 "RapidOCR or ONNX Runtime is missing. Redeploy after installing requirements.txt."
@@ -214,10 +214,15 @@ def _get_ocr_engine():
             if model_size not in {"tiny", "small", "medium"}:
                 logger.warning("Invalid RAPIDOCR_MODEL_SIZE %r; using tiny", model_size)
                 model_size = "tiny"
+            model_type = {
+                "tiny": ModelType.TINY,
+                "small": ModelType.SMALL,
+                "medium": ModelType.MEDIUM,
+            }[model_size]
             max_side = _ocr_max_side_length()
             _OCR_ENGINE = RapidOCR(params={
-                "Det.model_type": model_size,
-                "Rec.model_type": model_size,
+                "Det.model_type": model_type,
+                "Rec.model_type": model_type,
                 "Det.limit_type": "max",
                 "Det.limit_side_len": max_side,
                 "EngineConfig.onnxruntime.intra_op_num_threads": intra_threads,

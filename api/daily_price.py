@@ -46,7 +46,7 @@ def _acquire_fetch_lease():
 def _release_fetch_lease(token):
     # Do not clear a lease that expired and was acquired by a newer fetch.
     with transaction.atomic():
-        EnvironmentVariable.objects.select_for_update().get(name=DAILY_PRICE_FETCH_TIME)
+        EnvironmentVariable.objects.select_for_update().get(name=DAILY_TIME_SETTING)
         lock = EnvironmentVariable.objects.select_for_update().get(name=FETCH_LOCK_SETTING)
         if lock.value.startswith(f"{token}|"):
             EnvironmentVariable.objects.filter(pk=lock.pk, value=lock.value).update(
