@@ -210,11 +210,26 @@ def _get_ocr_engine():
         try:
             intra_threads = _ocr_thread_count("RAPIDOCR_INTRA_OP_THREADS")
             inter_threads = _ocr_thread_count("RAPIDOCR_INTER_OP_THREADS")
+            model_size = get_runtime_setting("RAPIDOCR_MODEL_SIZE", "tiny").strip().lower()
+            if model_size not in {"tiny", "small", "medium"}:
+                logger.warning("Invalid RAPIDOCR_MODEL_SIZE %r; using tiny", model_size)
+                model_size = "tiny"
+            max_side = _ocr_max_side_length()
             _OCR_ENGINE = RapidOCR(params={
+                "Det.model_type": model_size,
+                "Rec.model_type": model_size,
+                "Det.limit_type": "max",
+                "Det.limit_side_len": max_side,
                 "EngineConfig.onnxruntime.intra_op_num_threads": intra_threads,
                 "EngineConfig.onnxruntime.inter_op_num_threads": inter_threads,
             })
-            logger.info("RapidOCR initialized with ONNX threads intra=%s inter=%s", intra_threads, inter_threads)
+            logger.info(
+                "RapidOCR initialized with model=%s max_side=%s ONNX threads intra=%s inter=%s",
+                model_size,
+                max_side,
+                intra_threads,
+                inter_threads,
+            )
         except Exception as exc:
             raise RuntimeError(f"RapidOCR could not initialize: {exc}") from exc
     return _OCR_ENGINE
@@ -225,6 +240,13 @@ def _ocr_thread_count(setting_name):
         return min(max(int(get_runtime_setting(setting_name, "1")), 1), 8)
     except (TypeError, ValueError):
         return 1
+
+
+def _ocr_max_side_length():
+    try:
+        return min(max(int(get_runtime_setting("RAPIDOCR_MAX_SIDE_LEN", "640")), 320), 1600)
+    except (TypeError, ValueError):
+        return 640
 
 
 def _recognize_thumbnail(image_bytes):

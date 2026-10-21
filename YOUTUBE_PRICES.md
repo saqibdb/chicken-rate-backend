@@ -10,10 +10,12 @@ The importer reads runtime configuration from **Django Admin → Environment var
 - `YOUTUBE_FETCH_COOLDOWN_SECONDS`: minimum delay between manual fetch requests (default `3600`, one hour).
 - `DAILY_PRICE_FETCH_TIME`: daily automatic fetch time, `HH:MM` in the server's `Asia/Karachi` timezone. A migration creates this setting with default `08:00`.
 - `RAPIDOCR_INTRA_OP_THREADS` and `RAPIDOCR_INTER_OP_THREADS`: ONNX CPU thread counts; both default to `1` to limit CPU contention on small hosts.
+- `RAPIDOCR_MODEL_SIZE`: detector and recognizer model size (`tiny`, `small`, or `medium`); defaults to `tiny` to reduce memory use.
+- `RAPIDOCR_MAX_SIDE_LEN`: maximum detector image side length; defaults to `640` pixels. The importer does not upscale small thumbnails. Restart the server after changing either OCR setting.
 
 Run `python manage.py migrate` to create the environment variables table. Secret values are masked in the admin list and edit form; leaving a secret's edit field blank preserves its current value. The OCR engine and its ONNX Runtime dependency are installed from `requirements.txt`; no Tesseract executable or `TESSERACT_CMD` setting is needed.
 
-The importer resolves the channel uploads playlist, checks up to 200 recent uploads in the last 30 days, selects the first upload for each date, downloads its thumbnail, and runs RapidOCR. YouTube API requests retry transient connection and server errors up to three times. It reads the first two OCR lines and saves a price only when there is exactly one comma-grouped amount (for example, `14,600`), following the Flutter app's parsing rule. Run it on a schedule (for example, hourly) using the server's scheduler:
+The importer resolves the channel uploads playlist, checks up to 200 recent uploads in the last 30 days, selects the first upload for each date, downloads its thumbnail, and runs RapidOCR with the configured compact model and bounded input size. YouTube API requests retry transient connection and server errors up to three times. It reads the first two OCR lines and saves a price only when there is exactly one comma-grouped amount (for example, `14,600`), following the Flutter app's parsing rule. Run it on a schedule (for example, hourly) using the server's scheduler:
 
 ```sh
 python manage.py fetch_youtube_prices
