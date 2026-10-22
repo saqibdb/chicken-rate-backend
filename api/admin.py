@@ -6,8 +6,10 @@ from django.core.exceptions import PermissionDenied
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 
-from .models import DailyPriceFetchLog, Device, EnvironmentVariable, OCRDiagnosticLog, Price, PushNotification
+from .models import (DailyPriceFetchLog, Device, EnvironmentVariable, FuelDailyPriceFetchLog, FuelDevice, FuelPrice,
+                     FuelPushNotification, OCRDiagnosticLog, Price, PushNotification)
 from .push_notifications import send_broadcast
+from .fuel_push_notifications import send_fuel_broadcast
 
 
 @admin.register(Price)
@@ -19,6 +21,22 @@ class PriceAdmin(admin.ModelAdmin):
 
 @admin.register(Device)
 class DeviceAdmin(admin.ModelAdmin):
+    list_display = ("device_id", "device_name", "platform", "app_version", "last_seen")
+    search_fields = ("device_id", "device_name")
+    list_filter = ("platform",)
+
+    def get_readonly_fields(self, request, obj=None):
+        return ("first_seen", "last_seen") if obj else ()
+
+
+@admin.register(FuelPrice)
+class FuelPriceAdmin(admin.ModelAdmin):
+    list_display = ("effective_date", "petrol_price", "petrol_price_difference", "diesel_price", "diesel_price_difference", "price_updated_at")
+    list_filter = ("effective_date",)
+
+
+@admin.register(FuelDevice)
+class FuelDeviceAdmin(admin.ModelAdmin):
     list_display = ("device_id", "device_name", "platform", "app_version", "last_seen")
     search_fields = ("device_id", "device_name")
     list_filter = ("platform",)
@@ -73,6 +91,20 @@ class DailyPriceFetchLogAdmin(admin.ModelAdmin):
         return False
 
 
+@admin.register(FuelDailyPriceFetchLog)
+class FuelDailyPriceFetchLogAdmin(admin.ModelAdmin):
+    list_display = ("scheduled_date", "started_at", "completed_at", "success")
+    list_filter = ("success", "scheduled_date")
+    readonly_fields = ("scheduled_date", "started_at", "completed_at", "success", "error")
+    fields = readonly_fields
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
 class PushNotificationForm(forms.Form):
     title = forms.CharField(max_length=120, initial="Chicken Price")
     message = forms.CharField(max_length=2000, widget=forms.Textarea(attrs={"rows": 5}), label="Message")
@@ -117,6 +149,42 @@ class PushNotificationAdmin(admin.ModelAdmin):
             "form": form,
             "title": "Send push notification",
         }
+        return TemplateResponse(request, "admin/api/pushnotification/send.html", context)
+
+
+class FuelPushNotificationForm(forms.Form):
+    title = forms.CharField(max_length=120, initial="Fuel Prices")
+    message = forms.CharField(max_length=2000, widget=forms.Textarea(attrs={"rows": 5}), label="Message")
+
+
+@admin.register(FuelPushNotification)
+class FuelPushNotificationAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "title", "status", "devices_targeted", "sent_count", "failure_count")
+    list_filter = ("status", "created_at")
+    search_fields = ("title", "message", "error")
+    change_list_template = "admin/api/fuelpushnotification/change_list.html"
+    readonly_fields = ("created_at", "sent_at", "status", "devices_targeted", "sent_count", "failure_count", "error")
+    fields = ("title", "message", *readonly_fields)
+
+    def get_urls(self):
+        return [path("send/", self.admin_site.admin_view(self.send_view), name="api_fuelpushnotification_send")] + super().get_urls()
+
+    def send_view(self, request):
+        if not self.has_add_permission(request):
+            raise PermissionDenied
+        if request.method == "POST":
+            form = FuelPushNotificationForm(request.POST)
+            if form.is_valid():
+                notification = FuelPushNotification.objects.create(**form.cleaned_data)
+                notification = send_fuel_broadcast(notification)
+                if notification.sent_count:
+                    messages.success(request, f"Fuel notification processed: sent to {notification.sent_count} device(s); {notification.failure_count} failure(s).")
+                else:
+                    messages.error(request, notification.error or "No notifications were sent.")
+                return HttpResponseRedirect(reverse("admin:api_fuelpushnotification_changelist"))
+        else:
+            form = FuelPushNotificationForm()
+        context = {**self.admin_site.each_context(request), "opts": self.model._meta, "form": form, "title": "Send fuel push notification"}
         return TemplateResponse(request, "admin/api/pushnotification/send.html", context)
 
 

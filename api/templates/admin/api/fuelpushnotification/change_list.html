@@ -1,0 +1,6 @@
+{% extends "admin/change_list.html" %}
+{% load admin_urls %}
+{% block object-tools-items %}
+  <li><a href="{% url 'admin:api_fuelpushnotification_send' %}" class="addlink">Send fuel push notification</a></li>
+  {{ block.super }}
+{% endblock %}

@@ -20,8 +20,45 @@ class Price(models.Model):
         return f"{self.price_date}: {self.currency} {self.amount}"
 
 
+class FuelPrice(models.Model):
+    """Petrol and diesel prices, kept together by effective date."""
+
+    effective_date = models.DateField(unique=True, db_index=True)
+    petrol_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    petrol_price_difference = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    diesel_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    diesel_price_difference = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    price_updated_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-effective_date"]
+        verbose_name = "fuel price"
+        verbose_name_plural = "fuel prices"
+
+    def __str__(self):
+        return f"{self.effective_date}: petrol {self.petrol_price}, diesel {self.diesel_price}"
+
+
 class Device(models.Model):
     """Latest known metadata and activity for a calling mobile device."""
+
+    device_id = models.CharField(max_length=128, unique=True)
+    device_name = models.CharField(max_length=200, blank=True)
+    platform = models.CharField(max_length=64, blank=True)
+    app_version = models.CharField(max_length=64, blank=True)
+    os_version = models.CharField(max_length=64, blank=True)
+    fcm_token = models.CharField(max_length=512, blank=True, db_index=True)
+    last_ip_address = models.GenericIPAddressField(null=True, blank=True)
+    first_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True, db_index=True)
+
+    def __str__(self):
+        return self.device_name or self.device_id
+
+
+class FuelDevice(models.Model):
+    """Device metadata for the separate fuel price app."""
 
     device_id = models.CharField(max_length=128, unique=True)
     device_name = models.CharField(max_length=200, blank=True)
@@ -80,6 +117,19 @@ class DailyPriceFetchLog(models.Model):
         return f"{self.called_by} {self.called_at:%Y-%m-%d %H:%M:%S} ({self.result})"
 
 
+class FuelDailyPriceFetchLog(models.Model):
+    scheduled_date = models.DateField(unique=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    success = models.BooleanField(default=False)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+        verbose_name = "fuel daily price fetch log"
+        verbose_name_plural = "fuel daily price fetch logs"
+
+
 class PushNotification(models.Model):
     class Status(models.TextChoices):
         SENDING = "sending", "Sending"
@@ -101,6 +151,32 @@ class PushNotification(models.Model):
         ordering = ["-created_at"]
         verbose_name = "push notification"
         verbose_name_plural = "push notifications"
+
+    def __str__(self):
+        return f"{self.created_at:%Y-%m-%d %H:%M} — {self.status}"
+
+
+class FuelPushNotification(models.Model):
+    class Status(models.TextChoices):
+        SENDING = "sending", "Sending"
+        SENT = "sent", "Sent"
+        PARTIAL = "partial", "Partially sent"
+        FAILED = "failed", "Failed"
+
+    title = models.CharField(max_length=120, default="Fuel Prices")
+    message = models.TextField(max_length=2000)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.SENDING)
+    devices_targeted = models.PositiveIntegerField(default=0)
+    sent_count = models.PositiveIntegerField(default=0)
+    failure_count = models.PositiveIntegerField(default=0)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "fuel push notification"
+        verbose_name_plural = "fuel push notifications"
 
     def __str__(self):
         return f"{self.created_at:%Y-%m-%d %H:%M} — {self.status}"

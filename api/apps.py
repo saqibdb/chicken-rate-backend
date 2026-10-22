@@ -43,6 +43,38 @@ class ApiConfig(AppConfig):
             try:
                 close_old_connections()
                 now_utc = timezone.now()
+                fuel_target = day_time.fromisoformat(
+                    get_runtime_setting("FUEL_DAILY_PRICE_FETCH_TIME", "08:00").strip()
+                )
+                fuel_now = timezone.localtime()
+                if fuel_now.time().replace(tzinfo=None) >= fuel_target:
+                    today = timezone.localdate()
+                    from .models import FuelDailyPriceFetchLog
+                    from .fuel_prices import fetch_current_fuel_prices
+                    fetch_log, created = FuelDailyPriceFetchLog.objects.get_or_create(scheduled_date=today)
+                    retry_after = timezone.now() - timedelta(minutes=5)
+                    retry_failed = (
+                        not fetch_log.success
+                        and fetch_log.completed_at is not None
+                        and fetch_log.completed_at < retry_after
+                    )
+                    retry_stale = (
+                        not fetch_log.success
+                        and fetch_log.completed_at is None
+                        and fetch_log.started_at < retry_after
+                    )
+                    if created or retry_failed or retry_stale:
+                        logger.info("Starting scheduled fuel price fetch for %s", today)
+                        try:
+                            fetch_current_fuel_prices()
+                            FuelDailyPriceFetchLog.objects.filter(pk=fetch_log.pk).update(
+                                success=True, error="", completed_at=timezone.now()
+                            )
+                        except Exception as exc:
+                            FuelDailyPriceFetchLog.objects.filter(pk=fetch_log.pk).update(
+                                success=False, error=str(exc), completed_at=timezone.now()
+                            )
+                            logger.exception("Scheduled fuel price fetch failed")
                 stale_api_call = DailyPriceFetchLog.objects.filter(
                     called_by=DailyPriceFetchLog.Trigger.API,
                     result=DailyPriceFetchLog.Result.RUNNING,

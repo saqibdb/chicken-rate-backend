@@ -16,11 +16,12 @@ from django.utils.http import urlencode
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import DailyPriceFetchLog, Device, OCRDiagnosticLog, Price
+from .models import DailyPriceFetchLog, Device, FuelDevice, FuelPrice, OCRDiagnosticLog, Price
 from .configuration import get_runtime_setting
 from .daily_price import run_daily_price_fetch
 from .ocr_diagnostics import run_ocr_diagnostic
 from .youtube import YouTubeImportError, fetch_youtube_prices
+from .fuel_prices import FuelPriceImportError, fetch_current_fuel_prices, fetch_fuel_price_history, serialize_fuel_price
 
 
 API_DESCRIPTIONS = {
@@ -33,6 +34,11 @@ API_DESCRIPTIONS = {
     "ocr-diagnostic": {"methods": "GET", "description": "Run a single-thumbnail OCR diagnostic without saving a price. Returns a diagnostic ID and status URL.", "parameters": "Query: video_id (required; 11-character YouTube video ID)."},
     "ocr-diagnostic-status": {"methods": "GET", "description": "Read live stages and result of a one-thumbnail OCR diagnostic.", "parameters": "Query: diagnostic_id and signature (from status_url)."},
     "register-push-device": {"methods": "POST", "description": "Register or refresh an Android device's Firebase push token.", "parameters": "JSON body: device_id (required), fcm_token (required), device_name, platform, app_version, os_version (optional)."},
+    "fuel-current-prices": {"methods": "GET", "description": "Return the most recently saved combined petrol and diesel row.", "parameters": "None."},
+    "fuel-price-history": {"methods": "GET", "description": "Return saved combined petrol and diesel prices by effective date.", "parameters": "limit: maximum results, 1–365 (default 30)."},
+    "fuel-price-history-import": {"methods": "GET", "description": "Import daily provider history; call once per fuel to merge both fuels by date.", "parameters": "fuel: petrol or diesel (required). limit: 1–365 (default 30)."},
+    "fuel-fetch-current": {"methods": "GET", "description": "Fetch and save the provider's latest petrol and diesel prices.", "parameters": "None."},
+    "fuel-register-push-device": {"methods": "POST", "description": "Register a fuel app Firebase push token.", "parameters": "JSON body: device_id and fcm_token (required); device metadata optional."},
 }
 
 
@@ -302,3 +308,93 @@ def register_push_device(request):
     }
     Device.objects.update_or_create(device_id=device_id, defaults=defaults)
     return Response({"status": "ok", "message": "Push token registered."})
+
+
+@api_view(["GET"])
+def fuel_current_prices(request):
+    _record_fuel_device(request)
+    row = FuelPrice.objects.first()
+    if row is None:
+        return Response({"data": None, "message": "No fuel price data is available yet."}, status=404)
+    return Response({"data": serialize_fuel_price(row)})
+
+
+@api_view(["GET"])
+def fuel_fetch_current(request):
+    _record_fuel_device(request)
+    try:
+        return Response(fetch_current_fuel_prices())
+    except FuelPriceImportError as exc:
+        return Response({"status": "error", "message": str(exc)}, status=502)
+
+
+@api_view(["GET"])
+def fuel_price_history(request):
+    _record_fuel_device(request)
+    try:
+        limit = min(max(int(request.query_params.get("limit", 30)), 1), 365)
+    except ValueError:
+        return Response({"detail": "limit must be an integer from 1 to 365."}, status=400)
+    items = [serialize_fuel_price(row) for row in FuelPrice.objects.all()[:limit]]
+    return Response({"count": len(items), "results": items})
+
+
+@api_view(["GET"])
+def import_fuel_price_history(request):
+    _record_fuel_device(request)
+    fuel = request.query_params.get("fuel", "").strip().lower()
+    if fuel not in ("petrol", "diesel"):
+        return Response({"detail": "fuel must be petrol or diesel."}, status=400)
+    try:
+        limit = min(max(int(request.query_params.get("limit", 30)), 1), 365)
+    except ValueError:
+        return Response({"detail": "limit must be an integer from 1 to 365."}, status=400)
+    try:
+        result = fetch_fuel_price_history(fuel, limit)
+    except FuelPriceImportError as exc:
+        return Response({"status": "error", "message": str(exc)}, status=502)
+    rows = [serialize_fuel_price(row) for row in FuelPrice.objects.filter(
+        effective_date__in=result["dates"]
+    )]
+    result["results"] = rows
+    return Response(result)
+
+
+def _record_fuel_device(request):
+    device_id = request.headers.get("X-Device-ID", "").strip()
+    if not device_id:
+        return
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    ip_address = forwarded_for.split(",", 1)[0].strip() if forwarded_for else request.META.get("REMOTE_ADDR")
+    FuelDevice.objects.update_or_create(device_id=device_id[:128], defaults={
+        "device_name": request.headers.get("X-Device-Name", "")[:200],
+        "platform": request.headers.get("X-Platform", "")[:64],
+        "app_version": request.headers.get("X-App-Version", "")[:64],
+        "os_version": request.headers.get("X-OS-Version", "")[:64],
+        "last_ip_address": ip_address or None,
+    })
+
+
+@api_view(["POST"])
+def register_fuel_push_device(request):
+    device_id = str(request.data.get("device_id", "")).strip()
+    token = str(request.data.get("fcm_token", "")).strip()
+    if not device_id or not token:
+        return Response({"status": "error", "message": "device_id and fcm_token are required."}, status=400)
+    if len(device_id) > 128 or len(token) > 512:
+        return Response({"status": "error", "message": "device_id or fcm_token is too long."}, status=400)
+    FuelDevice.objects.update_or_create(device_id=device_id, defaults={
+        "fcm_token": token,
+        "device_name": str(request.data.get("device_name", ""))[:200],
+        "platform": str(request.data.get("platform", "android"))[:64],
+        "app_version": str(request.data.get("app_version", ""))[:64],
+        "os_version": str(request.data.get("os_version", ""))[:64],
+    })
+    return Response({"status": "ok", "message": "Fuel app push token registered."})
+
+
+@require_GET
+def fuel_api_docs(request):
+    return render(request, "api/fuel_api_docs.html", {
+        "base_url": f"{request.scheme}://{request.get_host()}/api/v1/fuel/",
+    })

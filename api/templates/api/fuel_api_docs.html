@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fuel Prices API</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, sans-serif; color: #17211b; background: #f3f6f3; }
+    body { max-width: 900px; margin: 40px auto; padding: 0 20px; }
+    h1 { margin-bottom: 8px; } .intro { color: #526057; margin-bottom: 28px; }
+    section { background: white; border: 1px solid #dce5dc; border-radius: 10px; padding: 18px; margin: 14px 0; }
+    code { background: #f1f3f2; border-radius: 4px; padding: 3px 6px; overflow-wrap: anywhere; }
+    p { line-height: 1.5; } pre { overflow-x: auto; background: #f1f3f2; padding: 14px; border-radius: 7px; }
+  </style>
+</head>
+<body>
+  <h1>Fuel Prices API</h1>
+  <p class="intro">Fuel app endpoints. Base URL: <code>{{ base_url }}</code></p>
+  <section><h2>Latest saved prices</h2><p><code>GET prices/current/</code> returns the latest effective date with petrol and diesel fields.</p></section>
+  <section><h2>Fetch latest provider prices</h2><p><code>GET prices/fetch/</code> reads both fuels from the provider and saves them in the row for each effective date. The backend also runs this once daily at <code>FUEL_DAILY_PRICE_FETCH_TIME</code> using the configured Asia/Karachi time zone.</p></section>
+  <section><h2>Read saved history</h2><p><code>GET prices/history/</code> returns the newest combined rows, with both fuels on each effective-date row when available. <code>limit</code> defaults to 30 and accepts 1–365. Example: <code>GET prices/history/?limit=90</code>.</p></section>
+  <section><h2>Import daily provider history</h2><p><code>GET prices/history/import/?fuel=petrol&amp;limit=30</code> or <code>GET prices/history/import/?fuel=diesel&amp;limit=30</code>. Each call saves that fuel into a row keyed by effective date, merging with the other fuel when present. <code>limit</code> accepts 1–365 and defaults to 30.</p></section>
+  <section><h2>Register a fuel app device</h2><p><code>POST devices/register-push/</code> with JSON fields <code>device_id</code>, <code>fcm_token</code>, and optionally <code>device_name</code>, <code>platform</code>, <code>app_version</code>, <code>os_version</code>.</p></section>
+  <section><h2>Send push notification</h2><p>Use <strong>Fuel push notifications</strong> in Django Admin and select <strong>Send fuel push notification</strong>. Delivery uses the independent <code>FUEL_FIREBASE_SERVICE_ACCOUNT_JSON</code> credential.</p></section>
+  <section><h2>Response shape</h2><pre>{
+  "effective_date": "2026-08-26",
+  "petrol_price": "343.10",
+  "petrol_price_difference": "1.12",
+  "diesel_price": "371.80",
+  "diesel_price_difference": "1.11",
+  "price_updated_at": "2026-08-25T23:20:06"
+}</pre></section>
+</body>
+</html>
