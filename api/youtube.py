@@ -15,7 +15,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from .configuration import get_runtime_setting
-from .models import Price
+from .models import Price, PushNotification
 
 
 PRICE_PATTERN = re.compile(r"(?<![0-9])([0-9]{1,3})\s*,\s*([0-9]{3})")
@@ -308,6 +308,50 @@ def _price_from_ocr(text):
     return (next(iter(amounts)), first_lines) if len(amounts) == 1 else (None, first_lines)
 
 
+def _send_current_price_notification(price, logs):
+    """Send a push only after today's price row has been committed."""
+    try:
+        from .push_notifications import send_broadcast
+
+        live_rate = int(price.amount)
+        # Match the Flutter app's estimate: (40 kg live price / 77% yield) * 1.15.
+        numerator = live_rate * 23
+        estimated_per_kg = (numerator * 2 + 616) // (2 * 616)
+        message = (
+            f"Live chicken (40 kg): Rs {live_rate:,} · "
+            f"Estimated whole chicken with giblets: Rs {estimated_per_kg:,}/kg"
+        )
+        notification = PushNotification.objects.create(
+            title="Rawalpindi chicken price",
+            message=message,
+        )
+        send_broadcast(notification)
+        status = "ok" if notification.sent_count else "warning"
+        _log(
+            logs,
+            "push_notification",
+            status,
+            "Price notification sent to registered devices." if notification.sent_count else
+            "Price was saved, but the push notification was not delivered to any device.",
+            amount=live_rate,
+            estimated_per_kg=estimated_per_kg,
+            devices_targeted=notification.devices_targeted,
+            sent=notification.sent_count,
+            failed=notification.failure_count,
+            notification_status=notification.status,
+            error=notification.error[:500] if notification.error else "",
+        )
+    except Exception as exc:
+        logger.exception("Could not send push notification for price row %s", price.pk)
+        _log(
+            logs,
+            "push_notification",
+            "warning",
+            "Price was saved, but push notification processing failed.",
+            error=str(exc)[:500],
+        )
+
+
 def fetch_todays_price(progress_callback=None):
     """Fetch only today's uploads and insert at most one price for today."""
     logs = _ProgressLogs(progress_callback)
@@ -412,7 +456,7 @@ def fetch_todays_price(progress_callback=None):
             _log(logs, "save_price", "skipped", "Today's price was saved by another fetch; no duplicate row was added.", video_id=existing.video_id, date=today.isoformat())
             return {"status": "already_exists", "added": 0, "videos_checked": len(videos), "logs": logs}
         try:
-            Price.objects.update_or_create(
+            price, _created = Price.objects.update_or_create(
                 video_id=video["video_id"],
                 defaults={
                     "price_date": today,
@@ -428,6 +472,7 @@ def fetch_todays_price(progress_callback=None):
             _log(logs, "save_price", "error", str(exc), amount=amount, **context)
             continue
         _log(logs, "save_price", "ok", "Today's price was added to the database.", amount=amount, **context)
+        _send_current_price_notification(price, logs)
         _log(logs, "complete", "success", "Today's price fetch completed.", added=1)
         return {"status": "success", "added": 1, "videos_checked": len(videos), "amount": amount, "logs": logs}
 
@@ -501,7 +546,7 @@ def fetch_youtube_prices(max_results=200):
         _log(logs, "parse_price", "ok", "Found one unambiguous comma-grouped price.", amount=amount, **context)
 
         try:
-            _, created = Price.objects.update_or_create(
+            price, created = Price.objects.update_or_create(
                 video_id=video["video_id"],
                 defaults={
                     "price_date": video["price_date"],
@@ -519,6 +564,8 @@ def fetch_youtube_prices(max_results=200):
         if created:
             counts["added"] += 1
             action = "added"
+            if price.price_date == timezone.localdate():
+                _send_current_price_notification(price, logs)
         else:
             counts["updated"] += 1
             action = "updated"
