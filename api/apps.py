@@ -50,8 +50,20 @@ class ApiConfig(AppConfig):
                 if fuel_now.time().replace(tzinfo=None) >= fuel_target:
                     today = timezone.localdate()
                     from .models import FuelDailyPriceFetchLog
-                    from .fuel_prices import fetch_current_fuel_prices
-                    fetch_log, created = FuelDailyPriceFetchLog.objects.get_or_create(scheduled_date=today)
+                    from .fuel_prices import fetch_and_notify_latest_fuel_prices
+                    fetch_log, created = FuelDailyPriceFetchLog.objects.get_or_create(
+                        scheduled_date=today,
+                        defaults={"scheduled_time": fuel_target},
+                    )
+                    changed_schedule = not created and fetch_log.scheduled_time != fuel_target
+                    if changed_schedule:
+                        FuelDailyPriceFetchLog.objects.filter(pk=fetch_log.pk).update(
+                            scheduled_time=fuel_target,
+                            started_at=timezone.now(),
+                            completed_at=None,
+                            success=False,
+                            error="",
+                        )
                     retry_after = timezone.now() - timedelta(minutes=5)
                     retry_failed = (
                         not fetch_log.success
@@ -63,12 +75,15 @@ class ApiConfig(AppConfig):
                         and fetch_log.completed_at is None
                         and fetch_log.started_at < retry_after
                     )
-                    if created or retry_failed or retry_stale:
+                    if created or changed_schedule or retry_failed or retry_stale:
                         logger.info("Starting scheduled fuel price fetch for %s", today)
                         try:
-                            fetch_current_fuel_prices()
+                            result = fetch_and_notify_latest_fuel_prices()
+                            notification = result.get("notification", {})
                             FuelDailyPriceFetchLog.objects.filter(pk=fetch_log.pk).update(
-                                success=True, error="", completed_at=timezone.now()
+                                success=True,
+                                error=notification.get("error") or "",
+                                completed_at=timezone.now(),
                             )
                         except Exception as exc:
                             FuelDailyPriceFetchLog.objects.filter(pk=fetch_log.pk).update(

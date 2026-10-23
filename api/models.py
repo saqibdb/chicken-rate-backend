@@ -119,6 +119,7 @@ class DailyPriceFetchLog(models.Model):
 
 class FuelDailyPriceFetchLog(models.Model):
     scheduled_date = models.DateField(unique=True)
+    scheduled_time = models.TimeField(null=True, blank=True)
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     success = models.BooleanField(default=False)

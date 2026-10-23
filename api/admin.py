@@ -93,9 +93,9 @@ class DailyPriceFetchLogAdmin(admin.ModelAdmin):
 
 @admin.register(FuelDailyPriceFetchLog)
 class FuelDailyPriceFetchLogAdmin(admin.ModelAdmin):
-    list_display = ("scheduled_date", "started_at", "completed_at", "success")
+    list_display = ("scheduled_date", "scheduled_time", "started_at", "completed_at", "success")
     list_filter = ("success", "scheduled_date")
-    readonly_fields = ("scheduled_date", "started_at", "completed_at", "success", "error")
+    readonly_fields = ("scheduled_date", "scheduled_time", "started_at", "completed_at", "success", "error")
     fields = readonly_fields
 
     def has_add_permission(self, request):

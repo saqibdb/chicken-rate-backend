@@ -10,7 +10,8 @@ from django.db import transaction
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
-from .models import FuelPrice
+from .models import FuelPrice, FuelPushNotification
+from .fuel_push_notifications import send_fuel_broadcast
 
 BASE_URL = "https://api2.autoones.com/api/fuel-prices"
 
@@ -75,6 +76,37 @@ def fetch_current_fuel_prices():
             obj.save()
             saved.append(obj)
     return {"status": "success", "saved": len(saved), "prices": [serialize_fuel_price(row) for row in saved]}
+
+
+def fetch_and_notify_latest_fuel_prices():
+    """Fetch current prices, persist by effective date, then notify fuel app devices."""
+    result = fetch_current_fuel_prices()
+    latest = FuelPrice.objects.first()
+    if latest is None or latest.petrol_price is None or latest.diesel_price is None:
+        raise FuelPriceImportError("Provider response did not produce both petrol and diesel prices.")
+
+    def format_change(value):
+        if value is None:
+            return "change unavailable"
+        amount = Decimal(value)
+        return f"{'+' if amount >= 0 else '-'}PKR {abs(amount):.2f}"
+
+    message = (
+        f"Effective {latest.effective_date.isoformat()} — "
+        f"Petrol: PKR {latest.petrol_price:.2f} ({format_change(latest.petrol_price_difference)}); "
+        f"Diesel: PKR {latest.diesel_price:.2f} ({format_change(latest.diesel_price_difference)})."
+    )
+    notification = FuelPushNotification.objects.create(title="Latest Fuel Prices", message=message)
+    notification = send_fuel_broadcast(notification)
+    result["notification"] = {
+        "id": notification.pk,
+        "status": notification.status,
+        "devices_targeted": notification.devices_targeted,
+        "sent_count": notification.sent_count,
+        "failure_count": notification.failure_count,
+        "error": notification.error or None,
+    }
+    return result
 
 
 def fetch_fuel_price_history(fuel, limit=30):
