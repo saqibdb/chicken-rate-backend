@@ -18,7 +18,8 @@ from .configuration import get_runtime_setting
 from .models import Price, PushNotification
 
 
-PRICE_PATTERN = re.compile(r"(?<![0-9])([0-9]{1,3})\s*,\s*([0-9]{3})")
+# OCR commonly turns a thousands comma into a dash, dot, or space (e.g. 16-000).
+PRICE_PATTERN = re.compile(r"(?<![0-9])([0-9]{1,3})\s*[,\.\-\u2010-\u2015\s]\s*([0-9]{3})(?![0-9])")
 DEFAULT_CHANNEL_HANDLE = "Mianshahzadsaeed786"
 MAX_THUMBNAIL_BYTES = 12 * 1024 * 1024
 _OCR_ENGINE = None
@@ -447,7 +448,7 @@ def fetch_todays_price(progress_callback=None):
             **context,
         )
         if amount is None:
-            _log(logs, "parse_price", "skipped", "No single comma-grouped amount was found in the first two OCR lines.", **context)
+            _log(logs, "parse_price", "skipped", "No single thousands-grouped amount was found in the first two OCR lines.", **context)
             continue
         _log(logs, "parse_price", "ok", "Found one unambiguous price.", amount=amount, **context)
 
@@ -540,10 +541,10 @@ def fetch_youtube_prices(max_results=200):
         amount, first_lines = _price_from_ocr(ocr_text)
         if amount is None:
             counts["skipped"] += 1
-            reason = "No comma-grouped amount was found in the first two OCR lines." if first_lines else "No readable text was found in the thumbnail."
+            reason = "No thousands-grouped amount was found in the first two OCR lines." if first_lines else "No readable text was found in the thumbnail."
             _log(logs, "parse_price", "skipped", reason, **context)
             continue
-        _log(logs, "parse_price", "ok", "Found one unambiguous comma-grouped price.", amount=amount, **context)
+        _log(logs, "parse_price", "ok", "Found one unambiguous thousands-grouped price.", amount=amount, **context)
 
         try:
             price, created = Price.objects.update_or_create(
