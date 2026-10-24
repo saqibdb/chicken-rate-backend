@@ -4,6 +4,7 @@ import re
 import ssl
 import tempfile
 import time
+import unicodedata
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -18,8 +19,19 @@ from .configuration import get_runtime_setting
 from .models import Price, PushNotification
 
 
-# OCR commonly turns a thousands comma into a dash, dot, or space (e.g. 16-000).
-PRICE_PATTERN = re.compile(r"(?<![0-9])([0-9]{1,3})\s*[,\.\-\u2010-\u2015\s]\s*([0-9]{3})(?![0-9])")
+# OCR commonly drops or misreads the thousands separator (e.g. 16-200 or 16200).
+_PRICE_DIGIT = r"[0-9OoQqIl|]"
+_PRICE_SEPARATOR = r"[,\.\-\u2010-\u2015\s'’:\u060c\u066c]"
+PRICE_GROUPED_PATTERN = re.compile(
+    rf"(?<![0-9])({_PRICE_DIGIT}{{1,3}})\s*{_PRICE_SEPARATOR}\s*({_PRICE_DIGIT}{{3}})(?![0-9])"
+)
+PRICE_PLAIN_PATTERN = re.compile(rf"(?<![0-9])({_PRICE_DIGIT}{{5,6}})(?![0-9])")
+_OCR_DIGIT_TRANSLATION = str.maketrans({
+    "O": "0", "o": "0", "Q": "0", "q": "0",
+    "I": "1", "l": "1", "|": "1",
+})
+DEFAULT_MIN_PRICE_AMOUNT = 5_000
+DEFAULT_MAX_PRICE_AMOUNT = 100_000
 DEFAULT_CHANNEL_HANDLE = "Mianshahzadsaeed786"
 MAX_THUMBNAIL_BYTES = 12 * 1024 * 1024
 _OCR_ENGINE = None
@@ -302,11 +314,39 @@ def _recognize_thumbnail(image_bytes):
 def _price_from_ocr(text):
     first_lines = [line.strip() for line in text.splitlines() if line.strip()][:2]
     first_two_lines = " ".join(first_lines)
-    amounts = {
-        int(f"{match.group(1)}{match.group(2)}")
-        for match in PRICE_PATTERN.finditer(first_two_lines)
+    first_two_lines = "".join(
+        str(unicodedata.digit(char)) if char.isdigit() else char
+        for char in first_two_lines
+    )
+    grouped_amounts = {
+        _price_digits(f"{match.group(1)}{match.group(2)}")
+        for match in PRICE_GROUPED_PATTERN.finditer(first_two_lines)
     }
-    return (next(iter(amounts)), first_lines) if len(amounts) == 1 else (None, first_lines)
+    plain_amounts = {
+        _price_digits(match.group(1))
+        for match in PRICE_PLAIN_PATTERN.finditer(first_two_lines)
+    }
+    min_amount, max_amount = _price_amount_bounds()
+    amounts = {amount for amount in grouped_amounts | plain_amounts if min_amount <= amount <= max_amount}
+    amount = next(iter(amounts)) if len(amounts) == 1 else None
+    return amount, first_lines, sorted(amounts)
+
+
+def _price_digits(value):
+    normalized = value.translate(_OCR_DIGIT_TRANSLATION)
+    return int("".join(str(unicodedata.digit(char)) for char in normalized))
+
+
+def _price_amount_bounds():
+    try:
+        minimum = int(get_runtime_setting("CHICKEN_PRICE_MIN_AMOUNT", str(DEFAULT_MIN_PRICE_AMOUNT)))
+        maximum = int(get_runtime_setting("CHICKEN_PRICE_MAX_AMOUNT", str(DEFAULT_MAX_PRICE_AMOUNT)))
+        if minimum < 0 or maximum < minimum:
+            raise ValueError("Invalid configured price limits")
+        return minimum, maximum
+    except (TypeError, ValueError):
+        logger.warning("Invalid chicken price amount limits; using defaults %s-%s", DEFAULT_MIN_PRICE_AMOUNT, DEFAULT_MAX_PRICE_AMOUNT)
+        return DEFAULT_MIN_PRICE_AMOUNT, DEFAULT_MAX_PRICE_AMOUNT
 
 
 def _send_current_price_notification(price, logs):
@@ -438,7 +478,7 @@ def fetch_todays_price(progress_callback=None):
                 return {"status": "error", "added": 0, "videos_checked": len(videos), "error": str(exc), "logs": logs}
             continue
 
-        amount, first_lines = _price_from_ocr(ocr_text)
+        amount, first_lines, amount_candidates = _price_from_ocr(ocr_text)
         _log(
             logs,
             "thumbnail_ocr",
@@ -448,9 +488,16 @@ def fetch_todays_price(progress_callback=None):
             **context,
         )
         if amount is None:
-            _log(logs, "parse_price", "skipped", "No single thousands-grouped amount was found in the first two OCR lines.", **context)
+            _log(
+                logs,
+                "parse_price",
+                "skipped",
+                "No single plausible price amount was found in the first two OCR lines.",
+                amount_candidates=amount_candidates,
+                **context,
+            )
             continue
-        _log(logs, "parse_price", "ok", "Found one unambiguous price.", amount=amount, **context)
+        _log(logs, "parse_price", "ok", "Found one unambiguous price.", amount=amount, amount_candidates=amount_candidates, **context)
 
         existing = Price.objects.filter(price_date=today).first()
         if existing:
@@ -538,13 +585,13 @@ def fetch_youtube_prices(max_results=200):
                 raise YouTubeImportError(str(exc), logs) from exc
             continue
 
-        amount, first_lines = _price_from_ocr(ocr_text)
+        amount, first_lines, amount_candidates = _price_from_ocr(ocr_text)
         if amount is None:
             counts["skipped"] += 1
-            reason = "No thousands-grouped amount was found in the first two OCR lines." if first_lines else "No readable text was found in the thumbnail."
-            _log(logs, "parse_price", "skipped", reason, **context)
+            reason = "No single plausible price amount was found in the first two OCR lines." if first_lines else "No readable text was found in the thumbnail."
+            _log(logs, "parse_price", "skipped", reason, amount_candidates=amount_candidates, **context)
             continue
-        _log(logs, "parse_price", "ok", "Found one unambiguous thousands-grouped price.", amount=amount, **context)
+        _log(logs, "parse_price", "ok", "Found one unambiguous price.", amount=amount, amount_candidates=amount_candidates, **context)
 
         try:
             price, created = Price.objects.update_or_create(
