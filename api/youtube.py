@@ -313,21 +313,40 @@ def _recognize_thumbnail(image_bytes):
 
 def _price_from_ocr(text):
     first_lines = [line.strip() for line in text.splitlines() if line.strip()][:2]
-    first_two_lines = " ".join(first_lines)
-    first_two_lines = "".join(
-        str(unicodedata.digit(char)) if char.isdigit() else char
-        for char in first_two_lines
-    )
-    grouped_amounts = {
-        _price_digits(f"{match.group(1)}{match.group(2)}")
-        for match in PRICE_GROUPED_PATTERN.finditer(first_two_lines)
-    }
-    plain_amounts = {
-        _price_digits(match.group(1))
-        for match in PRICE_PLAIN_PATTERN.finditer(first_two_lines)
-    }
+    normalized_lines = [
+        "".join(str(unicodedata.digit(char)) if char.isdigit() else char for char in line)
+        for line in first_lines
+    ]
+
+    def find_amounts(pattern, lines):
+        return {
+            _price_digits("".join(match.groups()))
+            for line in lines
+            for match in pattern.finditer(line)
+        }
+
+    # A correctly grouped value (for example, `16,200i`) is much stronger
+    # evidence than incidental ungrouped OCR digits elsewhere in the text.
+    grouped_first_line = find_amounts(PRICE_GROUPED_PATTERN, normalized_lines[:1])
+    grouped_amounts = find_amounts(PRICE_GROUPED_PATTERN, normalized_lines)
+    plain_first_line = find_amounts(PRICE_PLAIN_PATTERN, normalized_lines[:1])
+    plain_amounts = find_amounts(PRICE_PLAIN_PATTERN, normalized_lines)
     min_amount, max_amount = _price_amount_bounds()
-    amounts = {amount for amount in grouped_amounts | plain_amounts if min_amount <= amount <= max_amount}
+    def plausible(values):
+        return {amount for amount in values if min_amount <= amount <= max_amount}
+
+    grouped_first_line = plausible(grouped_first_line)
+    grouped_amounts = plausible(grouped_amounts)
+    plain_first_line = plausible(plain_first_line)
+    plain_amounts = plausible(plain_amounts)
+    if grouped_first_line:
+        amounts = grouped_first_line
+    elif grouped_amounts:
+        amounts = grouped_amounts
+    elif plain_first_line:
+        amounts = plain_first_line
+    else:
+        amounts = plain_amounts
     amount = next(iter(amounts)) if len(amounts) == 1 else None
     return amount, first_lines, sorted(amounts)
 
