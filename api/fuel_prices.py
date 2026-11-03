@@ -100,11 +100,11 @@ def fetch_and_notify_latest_fuel_prices():
         )
 
     message = "\n".join((
-        f"Fuel prices effective {latest.effective_date.isoformat()}:",
         price_line("Petrol", latest.petrol_price, latest.petrol_price_difference),
         price_line("Diesel", latest.diesel_price, latest.diesel_price_difference),
     ))
-    notification = FuelPushNotification.objects.create(title="Latest Fuel Prices", message=message)
+    title = f"Latest Fuel Prices effective {latest.effective_date.strftime('%d-%b-%Y').upper()}"
+    notification = FuelPushNotification.objects.create(title=title, message=message)
     notification = send_fuel_broadcast(notification)
     result["notification"] = {
         "id": notification.pk,
