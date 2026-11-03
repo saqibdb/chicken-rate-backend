@@ -85,17 +85,25 @@ def fetch_and_notify_latest_fuel_prices():
     if latest is None or latest.petrol_price is None or latest.diesel_price is None:
         raise FuelPriceImportError("Provider response did not produce both petrol and diesel prices.")
 
-    def format_change(value):
-        if value is None:
-            return "change unavailable"
-        amount = Decimal(value)
-        return f"{'+' if amount >= 0 else '-'}PKR {abs(amount):.2f}"
+    def price_line(fuel_name, price, change):
+        if change is None or Decimal(change) == 0:
+            return f"{fuel_name} Price Unchanged. Current Price: PKR {price:.2f}."
+        change = Decimal(change)
+        if change > 0:
+            return (
+                f"{fuel_name} Price Increased. New Price: PKR {price:.2f} "
+                f"(increased by PKR {change:.2f})."
+            )
+        return (
+            f"{fuel_name} Price has Dropped. New Price: PKR {price:.2f} "
+            f"(decreased by PKR {abs(change):.2f})."
+        )
 
-    message = (
-        f"Effective {latest.effective_date.isoformat()} — "
-        f"Petrol: PKR {latest.petrol_price:.2f} ({format_change(latest.petrol_price_difference)}); "
-        f"Diesel: PKR {latest.diesel_price:.2f} ({format_change(latest.diesel_price_difference)})."
-    )
+    message = "\n".join((
+        f"Fuel prices effective {latest.effective_date.isoformat()}:",
+        price_line("Petrol", latest.petrol_price, latest.petrol_price_difference),
+        price_line("Diesel", latest.diesel_price, latest.diesel_price_difference),
+    ))
     notification = FuelPushNotification.objects.create(title="Latest Fuel Prices", message=message)
     notification = send_fuel_broadcast(notification)
     result["notification"] = {
