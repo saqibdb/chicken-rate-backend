@@ -5,6 +5,7 @@ from django.http import HttpResponseRedirect
 from django.core.exceptions import PermissionDenied
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
+from types import MethodType
 
 from .models import (DailyPriceFetchLog, Device, EnvironmentVariable, FuelDailyPriceFetchLog, FuelDevice, FuelPrice,
                      FuelPushNotification, OCRDiagnosticLog, Price, PushNotification)
@@ -201,3 +202,35 @@ class OCRDiagnosticLogAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+# Present the chicken and fuel models as separate groups in the shared admin.
+_original_get_app_list = admin.site.get_app_list
+_fuel_admin_models = {
+    "FuelPrice",
+    "FuelDevice",
+    "FuelDailyPriceFetchLog",
+    "FuelPushNotification",
+}
+
+
+def _group_api_app_list(site, request, app_label=None):
+    app_list = _original_get_app_list(request, app_label)
+    grouped = []
+    for app in app_list:
+        if app["app_label"] != "api":
+            grouped.append(app)
+            continue
+
+        chicken_models = [model for model in app["models"] if model["object_name"] not in _fuel_admin_models]
+        fuel_models = [model for model in app["models"] if model["object_name"] in _fuel_admin_models]
+        if chicken_models:
+            chicken_app = {**app, "name": "ChickenAPI", "models": chicken_models}
+            grouped.append(chicken_app)
+        if fuel_models:
+            fuel_app = {**app, "name": "PetrolAPI", "models": fuel_models}
+            grouped.append(fuel_app)
+    return sorted(grouped, key=lambda app: app["name"].lower())
+
+
+admin.site.get_app_list = MethodType(_group_api_app_list, admin.site)
